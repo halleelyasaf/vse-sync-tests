@@ -122,15 +122,9 @@ func parsePTPClockIndexFromEthtool(out string) (string, bool) {
 	for line := range strings.SplitSeq(out, "\n") {
 		line = strings.TrimSpace(line)
 
-		switch {
-		case strings.Contains(line, "PTP Hardware Clock:"):
+		if strings.Contains(line, "PTP Hardware Clock:") || strings.Contains(line, "Hardware timestamp provider index:") {
 			clockNumber := strings.TrimSpace(strings.SplitN(line, ":", 2)[1])
 			if clockNumber != "" && clockNumber != "none" {
-				return clockNumber, true
-			}
-		case strings.Contains(line, "Hardware timestamp provider index:"):
-			clockNumber := strings.TrimSpace(strings.SplitN(line, ":", 2)[1])
-			if clockNumber != "" {
 				return clockNumber, true
 			}
 		}
