@@ -198,23 +198,6 @@ pyrightconfig.json
 vendor/
 .DS_Store
 
-### Generated documentation from test migration and improvements ###
-# These .md files were generated during code migration and improvements
-# Only README.md in root and subdirectories should be tracked
-/code-duplication-analysis.md
-/COMPLETE_SUMMARY.md
-/E825_FIRMWARE_FIX_VALIDATION.md
-/FINAL_SUCCESS_REPORT.md
-/GENERIC_TEST_RUNNER_IMPLEMENTATION.md
-/KNOWN_ISSUES.md
-/LIVE_CLUSTER_VALIDATION.md
-/MIGRATION_COMPLETE.md
-/PYTHON36_COMPATIBILITY_REMOVAL.md
-/PYTHON_UPGRADE.md
-/REGRESSION_FIX.md
-/REQUIREMENTS_README.md
-/test_e825_firmware_skip.md
-/ULTIMATE_SUCCESS_REPORT.md
-/VENV_SETUP.md
-bugfixes-e2e-script.md
-FIXES-SUMMARY.md
+# Compiled Go binaries
+collection_tools/collection_tools
+

@@ -4,74 +4,32 @@
 
 """Generic test runner framework for VSE Sync Tests.
 
-This module eliminates code duplication across 66 test implementations by providing
-a single generic test runner that dynamically loads parser/analyzer classes based
-on test metadata.
+This module eliminates code duplication across test implementations by providing
+a single generic test runner that dynamically loads parser/analyzer classes.
 
 Usage:
     In a testimpl.py file:
 
+    from vse_sync_pp.parsers.dpll import TimeErrorParser
+    from vse_sync_pp.analyzers.ppsdpll import TimeErrorAnalyzer
     from generic_test_runner import create_test_implementation
-    refimpl, main = create_test_implementation(__file__)
+
+    refimpl, main = create_test_implementation(
+        __file__,
+        parser_class=TimeErrorParser,
+        analyzer_class=TimeErrorAnalyzer
+    )
 
     if __name__ == '__main__':
         main()
 """
 
 import sys
-import importlib
+import inspect
 from argparse import ArgumentParser
 from os.path import join as joinpath, dirname
 
 import yaml
-
-
-# Parser modules that use canonical() method
-CANONICAL_PARSERS = {'dpll', 'pmc', 'gnss'}
-
-# Analyzers that require config parameter in refimpl signature
-CONFIG_REQUIRED_ANALYZERS = {
-    'MaxTimeIntervalErrorAnalyzer',
-}
-
-# Parser modules that typically need interface parameter
-INTERFACE_AWARE_PARSERS = {'ts2phc', 'phc2sys', 'ptp4l'}
-
-# Pattern C parsers that accept interface parameter (ts2phc, phc2sys)
-# ptp4l does NOT accept interface parameter
-PATTERN_C_INTERFACE_PARSERS = {'ts2phc', 'phc2sys'}
-
-
-def import_class(module_path, class_name):
-    """Dynamically import a class from a module path.
-
-    Args:
-        module_path: Full module path (e.g., 'vse_sync_pp.parsers.dpll')
-        class_name: Class name to import (e.g., 'TimeErrorParser')
-
-    Returns:
-        The imported class
-    """
-    module = importlib.import_module(module_path)
-    return getattr(module, class_name)
-
-
-def load_test_metadata(testimpl_file_path):
-    """Load test metadata from test_metadata.yaml.
-
-    Args:
-        testimpl_file_path: Path to the testimpl.py file (__file__)
-
-    Returns:
-        dict: Test metadata configuration
-    """
-    from os.path import realpath
-    # Use realpath to resolve symlinks and find the actual testimpl.py location
-    # where test_metadata.yaml is stored
-    real_path = realpath(testimpl_file_path)
-    metadata_path = joinpath(dirname(real_path), 'test_metadata.yaml')
-    with open(metadata_path, encoding='utf-8') as fid:
-        return yaml.safe_load(fid)
 
 
 def _get_display_name(config_path):
@@ -80,253 +38,166 @@ def _get_display_name(config_path):
         return yaml.safe_load(fid).get('display_name', '')
 
 
-def detect_parse_method(metadata):
-    """Determine whether to use canonical() or parse() method.
+def parser_accepts_interface(Parser):
+    """Check if Parser.__init__ accepts an interface parameter."""
+    try:
+        sig = inspect.signature(Parser.__init__)
+        params = [p for p in sig.parameters.keys() if p != 'self']
+        return len(params) > 0
+    except Exception:
+        return False
 
-    Args:
-        metadata: Test metadata dict
 
-    Returns:
-        str: 'canonical' or 'parse'
+def uses_canonical_method(Parser):
+    """Check if Parser uses canonical() method instead of parse().
+
+    Based on parser module - dpll, pmc, gnss use canonical().
     """
-    # Check if explicitly specified in metadata
-    if 'parser' in metadata and 'method' in metadata['parser']:
-        return metadata['parser']['method']
-
-    # Auto-detect based on parser module
-    parser_module = metadata['parser']['module'].split('.')[-1]  # Get last part (e.g., 'dpll')
-
-    if parser_module in CANONICAL_PARSERS:
-        return 'canonical'
-    else:
-        return 'parse'
+    module = Parser.__module__
+    parser_name = module.split('.')[-1] if '.' in module else module
+    return parser_name in {'dpll', 'pmc', 'gnss'}
 
 
-def detect_signature_pattern(metadata):
-    """Determine the refimpl function signature pattern.
+def parser_needs_interface_cli(Parser):
+    """Check if this parser type needs interface in CLI arguments.
 
-    Patterns:
-        A: refimpl(filename, encoding='utf-8')
-        B: refimpl(filename, interface=None, encoding='utf-8')
-        C: refimpl(filename, config, interface=None, encoding='utf-8')
-
-    Args:
-        metadata: Test metadata dict
-
-    Returns:
-        str: 'A', 'B', or 'C'
+    This is based on how e2e.sh calls the test, not Parser.__init__ signature.
+    Only ts2phc tests get interface from CLI arguments.
+    ptp4l tests pass empty string "" to refimpl (no CLI argument).
+    phc2sys tests don't use interface at all.
+    DPLL tests are NOT called with interface even though Parser accepts it.
     """
-    # Check if explicitly specified in metadata
-    if 'signature' in metadata and 'pattern' in metadata['signature']:
-        return metadata['signature']['pattern']
-
-    # Auto-detect based on analyzer and parser
-    analyzer_class = metadata['analyzer']['class']
-    parser_module = metadata['parser']['module'].split('.')[-1]
-
-    # Pattern C: Config required analyzers
-    if analyzer_class in CONFIG_REQUIRED_ANALYZERS:
-        return 'C'
-
-    # Pattern B: Interface-aware parsers
-    if parser_module in INTERFACE_AWARE_PARSERS:
-        return 'B'
-
-    # Pattern A: Default
-    return 'A'
+    module = Parser.__module__
+    parser_name = module.split('.')[-1] if '.' in module else module
+    return parser_name == 'ts2phc'
 
 
-def _execute_test(Parser, Analyzer, filename, encoding, interface, config, parse_method, config_path):
-    """Execute the test with the given parser and analyzer.
-
+def create_refimpl(Parser, Analyzer, config_path):
+    """Create refimpl function - same signature for all tests.
+    
+    Runtime inspection determines how to initialize Parser and Analyzer.
+    
     Args:
         Parser: Parser class
         Analyzer: Analyzer class
-        filename: Input log file path
-        encoding: File encoding
-        interface: Optional interface parameter
-        config: Optional config parameter
-        parse_method: 'canonical' or 'parse'
         config_path: Path to config.yaml
-
+        
     Returns:
-        dict: Test result with keys: result, reason, timestamp, duration, analysis, pdf_display_name
+        function: refimpl(filename, interface=None, encoding='utf-8')
     """
-    # Lazy import to avoid unnecessary dependencies at module load time
-    from vse_sync_pp.common import open_input, print_loj
-    from vse_sync_pp.analyzers.analyzer import Config
-
-    # Initialize parser (with interface if provided)
-    if interface is not None:
-        parser = Parser(interface)
-    else:
-        parser = Parser()
-
-    # Initialize analyzer (with config if provided)
-    if config is not None:
-        # Config parameter is the config file path
-        analyzer = Analyzer(Config.from_yaml(config))
-    else:
-        # Use default config from test directory
-        analyzer = Analyzer(Config.from_yaml(config_path))
-
-    # Parse and collect data
-    with open_input(filename, encoding=encoding) as fid:
-        if parse_method == 'canonical':
-            # Loop iteration pattern
-            for parsed in parser.canonical(fid):
-                analyzer.collect(parsed)
+    use_canonical = uses_canonical_method(Parser)
+    parser_takes_interface = parser_accepts_interface(Parser)
+    
+    def refimpl(filename, interface=None, encoding='utf-8'):
+        """Execute test and return results."""
+        from vse_sync_pp.common import open_input
+        from vse_sync_pp.analyzers.analyzer import Config
+        
+        # Initialize parser - use interface if parser accepts it and it's provided
+        if parser_takes_interface and interface is not None:
+            parser = Parser(interface)
         else:
-            # Unpacking pattern
-            analyzer.collect(*parser.parse(fid))
-
-    # Return test results
-    return {
-        'result': analyzer.result,
-        'reason': analyzer.reason,
-        'timestamp': analyzer.timestamp,
-        'duration': analyzer.duration,
-        'analysis': analyzer.analysis,
-        'pdf_display_name': _get_display_name(config_path),
-    }
-
-
-def create_refimpl_function(Parser, Analyzer, pattern, parse_method, base_path):
-    """Create refimpl function with the correct signature.
-
-    Args:
-        Parser: Parser class
-        Analyzer: Analyzer class
-        pattern: Signature pattern ('A', 'B', or 'C')
-        parse_method: 'canonical' or 'parse'
-        base_path: Path to the testimpl.py file
-
-    Returns:
-        function: refimpl function with appropriate signature
-    """
-    config_path = joinpath(dirname(base_path), 'config.yaml')
-
-    if pattern == 'A':
-        def refimpl(filename, encoding='utf-8'):
-            return _execute_test(
-                Parser, Analyzer, filename, encoding,
-                interface=None, config=None, parse_method=parse_method,
-                config_path=config_path
-            )
-
-    elif pattern == 'B':
-        def refimpl(filename, interface=None, encoding='utf-8'):
-            return _execute_test(
-                Parser, Analyzer, filename, encoding,
-                interface=interface, config=None, parse_method=parse_method,
-                config_path=config_path
-            )
-
-    elif pattern == 'C':
-        # Pattern C: Like Pattern B but uses config in analyzer
-        # Original behavior: config was hardcoded (CONFIG constant), not a CLI parameter
-        def refimpl(filename, interface=None, encoding='utf-8'):
-            return _execute_test(
-                Parser, Analyzer, filename, encoding,
-                interface=interface, config=config_path, parse_method=parse_method,
-                config_path=config_path
-            )
-
-    else:
-        raise ValueError(f"Unknown signature pattern: {pattern}")
-
+            parser = Parser()
+        
+        # All analyzers get config
+        analyzer = Analyzer(Config.from_yaml(config_path))
+        
+        # Parse and collect data
+        with open_input(filename, encoding=encoding) as fid:
+            if use_canonical:
+                for parsed in parser.canonical(fid):
+                    analyzer.collect(parsed)
+            else:
+                analyzer.collect(*parser.parse(fid))
+        
+        return {
+            'result': analyzer.result,
+            'reason': analyzer.reason,
+            'timestamp': analyzer.timestamp,
+            'duration': analyzer.duration,
+            'analysis': analyzer.analysis,
+            'pdf_display_name': _get_display_name(config_path),
+        }
+    
     return refimpl
 
 
-def create_main_function(refimpl, pattern, parser_module=None):
-    """Create main function with correct argument parsing.
+def create_main(refimpl, Parser):
+    """Create main function with CLI argument parsing.
 
     Args:
         refimpl: The refimpl function to call
-        pattern: Signature pattern ('A', 'B', or 'C')
-        parser_module: Parser module name (for Pattern C interface detection)
+        Parser: Parser class (to determine if CLI needs interface)
 
     Returns:
         function: main function
     """
+    needs_interface_cli = parser_needs_interface_cli(Parser)
+    parser_takes_interface = parser_accepts_interface(Parser)
+
+    # Determine module for special cases
+    module = Parser.__module__
+    parser_name = module.split('.')[-1] if '.' in module else module
+
     def main():
         """Run this test and print test output as JSON to stdout"""
-        # Lazy import to avoid unnecessary dependencies
         from vse_sync_pp.common import print_loj
 
         aparser = ArgumentParser(description=main.__doc__)
         aparser.add_argument('input', help="log file to analyze")
 
-        if pattern == 'B':
-            # Pattern B: interface parameter (required, multi-value)
-            # Use nargs='+' to require at least one interface (matches original behavior)
-            aparser.add_argument('interface', nargs='+', help="interface identifier(s) to capture")
+        if needs_interface_cli:
+            # ts2phc: get interface from CLI args
+            aparser.add_argument('interface', nargs='+',
+                               help="interface identifier(s) to capture")
             args = aparser.parse_args()
             output = refimpl(args.input, interface=args.interface)
-
-        elif pattern == 'C':
-            # Pattern C: Config required, interface may or may not be needed
-            # ts2phc/phc2sys parsers need interface, ptp4l does not
-            # Config is always hardcoded, never passed via CLI
-            parser_name = parser_module.split('.')[-1] if parser_module else ''
-            needs_interface = parser_name in PATTERN_C_INTERFACE_PARSERS
-
-            if needs_interface:
-                # Pattern C with interface (ts2phc, phc2sys parsers)
-                # Interface is REQUIRED - use nargs='+' (matches original behavior)
-                aparser.add_argument('interface', nargs='+', help="interface identifier(s) to capture")
-                args = aparser.parse_args()
-                output = refimpl(args.input, interface=args.interface)
-            else:
-                # Pattern C without interface (ptp4l parser)
-                args = aparser.parse_args()
-                output = refimpl(args.input)
-
+        elif parser_takes_interface and parser_name == 'ptp4l':
+            # ptp4l: pass empty string to refimpl (no CLI arg)
+            args = aparser.parse_args()
+            output = refimpl(args.input, interface="")
         else:
-            # Pattern A: filename only
+            # phc2sys, dpll, pmc, gnss: no interface at all
             args = aparser.parse_args()
             output = refimpl(args.input)
 
-        # Print output and exit appropriately
         if not print_loj(output):
             sys.exit(1)
 
     return main
 
 
-def create_test_implementation(testimpl_file_path):
-    """Create refimpl and main functions from test metadata.
+def create_test_implementation(testimpl_file_path, parser_class, analyzer_class):
+    """Create refimpl and main functions from parser and analyzer classes.
 
-    This is the main entry point for test implementations using the generic framework.
+    This is the main entry point for test implementations.
 
     Args:
-        testimpl_file_path: __file__ from the testimpl.py calling this
+        testimpl_file_path: __file__ from the testimpl.py
+        parser_class: Parser class (e.g., TimeErrorParser)
+        analyzer_class: Analyzer class (e.g., TimeErrorAnalyzer)
 
     Returns:
         tuple: (refimpl_function, main_function)
 
     Example:
-        In a testimpl.py file:
-
+        from vse_sync_pp.parsers.dpll import TimeErrorParser
+        from vse_sync_pp.analyzers.ppsdpll import TimeErrorAnalyzer
         from generic_test_runner import create_test_implementation
-        refimpl, main = create_test_implementation(__file__)
+
+        refimpl, main = create_test_implementation(
+            __file__,
+            parser_class=TimeErrorParser,
+            analyzer_class=TimeErrorAnalyzer
+        )
 
         if __name__ == '__main__':
             main()
     """
-    # Load test metadata
-    metadata = load_test_metadata(testimpl_file_path)
-
-    # Import parser and analyzer classes
-    Parser = import_class(metadata['parser']['module'], metadata['parser']['class'])
-    Analyzer = import_class(metadata['analyzer']['module'], metadata['analyzer']['class'])
-
-    # Detect patterns
-    parse_method = detect_parse_method(metadata)
-    pattern = detect_signature_pattern(metadata)
-
-    # Create refimpl and main functions
-    refimpl = create_refimpl_function(Parser, Analyzer, pattern, parse_method, testimpl_file_path)
-    main = create_main_function(refimpl, pattern, parser_module=metadata['parser']['module'])
-
+    # Use original __file__ for config.yaml (not realpath - for symlink support)
+    config_path = joinpath(dirname(testimpl_file_path), 'config.yaml')
+    
+    refimpl = create_refimpl(parser_class, analyzer_class, config_path)
+    main = create_main(refimpl, parser_class)
+    
     return refimpl, main
