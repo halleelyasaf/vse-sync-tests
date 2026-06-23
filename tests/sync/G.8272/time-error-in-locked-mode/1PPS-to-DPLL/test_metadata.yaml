@@ -1,0 +1,14 @@
+# Test metadata for 1PPS-to-DPLL time error test
+# This file drives the generic test runner framework
+
+parser:
+  module: vse_sync_pp.parsers.dpll
+  class: TimeErrorParser
+  method: canonical  # Uses canonical() with loop iteration
+
+analyzer:
+  module: vse_sync_pp.analyzers.ppsdpll
+  class: TimeErrorAnalyzer
+
+signature:
+  pattern: A  # refimpl(filename, encoding='utf-8')

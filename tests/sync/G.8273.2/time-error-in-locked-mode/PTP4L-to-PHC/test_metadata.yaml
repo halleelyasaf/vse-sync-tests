@@ -1,0 +1,10 @@
+# Test metadata
+parser:
+  module: vse_sync_pp.parsers.ptp4l
+  class: TimeErrorParser
+  method: parse
+analyzer:
+  module: vse_sync_pp.analyzers.ptp4l
+  class: TimeErrorAnalyzer
+signature:
+  pattern: B

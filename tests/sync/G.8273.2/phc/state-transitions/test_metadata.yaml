@@ -1,0 +1,10 @@
+# Test metadata
+parser:
+  module: vse_sync_pp.parsers.pmc
+  class: ClockClassParser
+  method: canonical
+analyzer:
+  module: vse_sync_pp.analyzers.pmc
+  class: ClockStateAnalyzer
+signature:
+  pattern: A

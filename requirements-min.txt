@@ -1,0 +1,17 @@
+# VSE Sync Tests - Minimal Python Dependencies
+# Python 3.8+ required
+#
+# This is a minimal requirements file - dependencies will pull in their own requirements.
+#
+# Installation:
+#   python3 -m venv venv
+#   source venv/bin/activate
+#   pip install -r requirements-min.txt
+
+# Core test framework dependencies
+# Note: matplotlib 3.8+ requires Python 3.8+ for the ecdf() plotting method
+PyYAML>=5.4
+pandas>=1.3.0
+matplotlib>=3.8.0
+allantools>=2020.1
+junitparser>=2.0.0

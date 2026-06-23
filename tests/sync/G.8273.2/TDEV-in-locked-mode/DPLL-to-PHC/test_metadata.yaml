@@ -1,0 +1,10 @@
+# Test metadata
+parser:
+  module: vse_sync_pp.parsers.ts2phc
+  class: TimeErrorParser
+  method: parse
+analyzer:
+  module: vse_sync_pp.analyzers.ts2phc
+  class: TimeDeviationAnalyzer
+signature:
+  pattern: C

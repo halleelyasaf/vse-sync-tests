@@ -1,0 +1,14 @@
+# Test metadata for DPLL-to-PHC time error test
+# This file drives the generic test runner framework
+
+parser:
+  module: vse_sync_pp.parsers.ts2phc
+  class: TimeErrorParser
+  method: parse  # Uses parse() with unpacking
+
+analyzer:
+  module: vse_sync_pp.analyzers.ts2phc
+  class: TimeErrorAnalyzer
+
+signature:
+  pattern: B  # refimpl(filename, interface=None, encoding='utf-8')

@@ -1,0 +1,10 @@
+# Test metadata
+parser:
+  module: vse_sync_pp.parsers.dpll
+  class: SMA1TimeErrorParser
+  method: canonical
+analyzer:
+  module: vse_sync_pp.analyzers.ppsdpll
+  class: TimeDeviationAnalyzer
+signature:
+  pattern: A
