@@ -25,9 +25,9 @@ while True:
         raise ImportError(f"Unable to locate tests/common from {__file__}")
     current_dir = parent_dir
 
-from vse_sync_pp.parsers.ptp4l import TimeErrorParser
-from vse_sync_pp.analyzers.ptp4l import MaxTimeIntervalErrorAnalyzer
-from generic_test_runner import create_test_implementation
+from vse_sync_pp.parsers.ptp4l import TimeErrorParser # noqa: E402
+from vse_sync_pp.analyzers.ptp4l import MaxTimeIntervalErrorAnalyzer # noqa: E402
+from generic_test_runner import create_test_implementation # noqa: E402
 
 refimpl, main = create_test_implementation(
     __file__,

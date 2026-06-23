@@ -74,34 +74,34 @@ def parser_needs_interface_cli(Parser):
 
 def create_refimpl(Parser, Analyzer, config_path):
     """Create refimpl function - same signature for all tests.
-    
+
     Runtime inspection determines how to initialize Parser and Analyzer.
-    
+
     Args:
         Parser: Parser class
         Analyzer: Analyzer class
         config_path: Path to config.yaml
-        
+
     Returns:
         function: refimpl(filename, interface=None, encoding='utf-8')
     """
     use_canonical = uses_canonical_method(Parser)
     parser_takes_interface = parser_accepts_interface(Parser)
-    
+
     def refimpl(filename, interface=None, encoding='utf-8'):
         """Execute test and return results."""
         from vse_sync_pp.common import open_input
         from vse_sync_pp.analyzers.analyzer import Config
-        
+
         # Initialize parser - use interface if parser accepts it and it's provided
         if parser_takes_interface and interface is not None:
             parser = Parser(interface)
         else:
             parser = Parser()
-        
+
         # All analyzers get config
         analyzer = Analyzer(Config.from_yaml(config_path))
-        
+
         # Parse and collect data
         with open_input(filename, encoding=encoding) as fid:
             if use_canonical:
@@ -110,7 +110,7 @@ def create_refimpl(Parser, Analyzer, config_path):
             else:
                 for parsed in parser.parse(fid):
                     analyzer.collect(parsed)
-        
+
         return {
             'result': analyzer.result,
             'reason': analyzer.reason,
@@ -119,7 +119,7 @@ def create_refimpl(Parser, Analyzer, config_path):
             'analysis': analyzer.analysis,
             'pdf_display_name': _get_display_name(config_path),
         }
-    
+
     return refimpl
 
 
@@ -150,7 +150,7 @@ def create_main(refimpl, Parser):
         if needs_interface_cli:
             # ts2phc: get interface from CLI args
             aparser.add_argument('interface', nargs='+',
-                               help="interface identifier(s) to capture")
+                                 help="interface identifier(s) to capture")
             args = aparser.parse_args()
             output = refimpl(args.input, interface=args.interface)
         elif parser_takes_interface and parser_name == 'ptp4l':
@@ -197,8 +197,8 @@ def create_test_implementation(testimpl_file_path, parser_class, analyzer_class)
     """
     # Use original __file__ for config.yaml (not realpath - for symlink support)
     config_path = joinpath(dirname(testimpl_file_path), 'config.yaml')
-    
+
     refimpl = create_refimpl(parser_class, analyzer_class, config_path)
     main = create_main(refimpl, parser_class)
-    
+
     return refimpl, main

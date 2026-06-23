@@ -25,9 +25,9 @@ while True:
         raise ImportError(f"Unable to locate tests/common from {__file__}")
     current_dir = parent_dir
 
-from vse_sync_pp.parsers.pmc import ClockClassParser
-from vse_sync_pp.analyzers.pmc import ClockStateAnalyzer
-from generic_test_runner import create_test_implementation
+from vse_sync_pp.parsers.pmc import ClockClassParser # noqa: E402
+from vse_sync_pp.analyzers.pmc import ClockStateAnalyzer # noqa: E402
+from generic_test_runner import create_test_implementation # noqa: E402
 
 refimpl, main = create_test_implementation(
     __file__,
