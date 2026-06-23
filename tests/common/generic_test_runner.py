@@ -108,7 +108,8 @@ def create_refimpl(Parser, Analyzer, config_path):
                 for parsed in parser.canonical(fid):
                     analyzer.collect(parsed)
             else:
-                analyzer.collect(*parser.parse(fid))
+                for parsed in parser.parse(fid):
+                    analyzer.collect(parsed)
         
         return {
             'result': analyzer.result,
