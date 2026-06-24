@@ -18,8 +18,11 @@ import (
 )
 
 var _ = Describe("GetGPSNav", func() {
-	var clientset *clients.Clientset
-	var response map[string][]byte
+	var (
+		clientset *clients.Clientset
+		response  map[string][]byte
+	)
+
 	BeforeEach(func() { //nolint:dupl // this is test setup code
 		clientset = testutils.GetMockedClientSet(testPod)
 		response = make(map[string][]byte)
@@ -27,13 +30,18 @@ var _ = Describe("GetGPSNav", func() {
 			reader := bufio.NewReader(options.Stdin)
 			cmd := ""
 			keepReading := true
+
 			var cmdSb30 strings.Builder
+
 			for keepReading {
 				line, prefix, _ := reader.ReadLine()
 				keepReading = prefix
-				cmdSb30.WriteString(string(line))
+
+				cmdSb30.Write(line)
 			}
+
 			cmd += cmdSb30.String()
+
 			return response[cmd], []byte(""), nil
 		}
 		clients.NewSPDYExecutor = testutils.NewFakeNewSPDYExecutor(responder, nil)
@@ -88,7 +96,6 @@ var _ = Describe("GetGPSNav", func() {
 			Expect(gpsInfo.AntennaDetails[1].BlockID).To(Equal(1))
 			Expect(gpsInfo.AntennaDetails[1].Status).To(Equal(2))
 			Expect(gpsInfo.AntennaDetails[1].Power).To(Equal(1))
-
 		})
 	})
 })

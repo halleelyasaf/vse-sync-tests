@@ -13,6 +13,26 @@ from ..common import open_input
 from ..uri import UriBuilder
 
 
+def _indent_xml(elem, level=0):
+    """Manual XML indentation for Python 3.6-3.8 compatibility.
+
+    Replicates ET.indent() behavior for older Python versions.
+    """
+    indent = "\n" + "  " * level
+    if len(elem):
+        if not elem.text or not elem.text.strip():
+            elem.text = indent + "  "
+        if not elem.tail or not elem.tail.strip():
+            elem.tail = indent
+        for child in elem:
+            _indent_xml(child, level + 1)
+        if not child.tail or not child.tail.strip():
+            child.tail = indent
+    else:
+        if level and (not elem.tail or not elem.tail.strip()):
+            elem.tail = indent
+
+
 def _buildattrs(**kwargs):
     """Return a dict from `kwargs` suitable for creating an XML element with."""
     attrs = {}
@@ -263,8 +283,20 @@ def junit(
         e_suite.append(e_case)
     e_root.append(e_suite)
     if prettify:
-        ET.indent(e_root)
-    return ET.tostring(e_root, encoding="unicode", xml_declaration=True)
+        # Python 3.6 compatibility - ET.indent was added in Python 3.9
+        if hasattr(ET, 'indent'):
+            ET.indent(e_root)
+        else:
+            # Manual indentation for Python 3.6-3.8
+            _indent_xml(e_root)
+
+    # Python 3.6 compatibility - xml_declaration parameter added in Python 3.8
+    try:
+        return ET.tostring(e_root, encoding="unicode", xml_declaration=True)
+    except TypeError:
+        # Python 3.6/3.7 fallback - manually add XML declaration
+        xml_str = ET.tostring(e_root, encoding="unicode")
+        return '<?xml version="1.0"?>\n' + xml_str
 
 
 def main():

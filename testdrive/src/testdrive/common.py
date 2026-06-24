@@ -3,7 +3,14 @@
 """Common code for command line tools"""
 
 import sys
-from contextlib import nullcontext
+try:
+    from contextlib import nullcontext
+except ImportError:
+    # Python 3.6 compatibility - nullcontext was added in Python 3.7
+    from contextlib import contextmanager
+    @contextmanager
+    def nullcontext(enter_result=None):
+        yield enter_result
 
 
 def open_input(filename, encoding="utf-8", **kwargs):

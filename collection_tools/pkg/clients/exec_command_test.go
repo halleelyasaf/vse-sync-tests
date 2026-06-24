@@ -41,9 +41,12 @@ var testPod = &v1.Pod{
 
 var _ = Describe("NewContainerContext", func() {
 	var clientset *clients.Clientset
+
 	BeforeEach(func() {
 		clients.ClearClientSet()
+
 		var err error
+
 		clientset, err = clients.GetClientset(kubeconfigPath)
 		if err != nil {
 			panic("failed to get clientset")
@@ -75,6 +78,7 @@ var _ = Describe("NewContainerContext", func() {
 
 var _ = Describe("ExecCommandContainer", func() {
 	var clientset *clients.Clientset
+
 	BeforeEach(func() {
 		clientset = testutils.GetMockedClientSet(testPod)
 	})

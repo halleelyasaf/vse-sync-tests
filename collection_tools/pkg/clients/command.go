@@ -98,10 +98,12 @@ func (cgrp *CmdGroup) AddCommand(c *Cmd) {
 
 func (cgrp *CmdGroup) GetCommand() string {
 	res := ""
+
 	var resSb91 strings.Builder
 	for _, c := range cgrp.cmds {
 		resSb91.WriteString(c.GetCommand())
 	}
+
 	res += resSb91.String()
 
 	return res

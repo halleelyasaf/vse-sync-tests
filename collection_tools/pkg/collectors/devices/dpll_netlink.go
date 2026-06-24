@@ -66,6 +66,12 @@ func (dpllInfo *DevNetlinkDPLLInfo) GetAnalyserFormat() ([]*callbacks.AnalyserFo
 		subType = OnePPSSubtype
 	case SMA1Label:
 		subType = SMA1Subtype
+	default:
+		// For other pins (timing cards, fallback pins), use a generic "dpll" subtype
+		// instead of "unknown" to indicate valid DPLL data from a non-standard source
+		if dpllInfo.PinType != "" {
+			subType = OnePPSSubtype // Use "dpll" prefix for compatibility
+		}
 	}
 
 	formatted := callbacks.AnalyserFormatType{
@@ -309,6 +315,12 @@ func BuildNetlinkInfoFetcher(interfaceName string) error {
 					"python3 /root/custom_scripts/json_encoder.py",
 				Trim: true,
 			},
+			{
+				Key: "dpll-netlink-devices",
+				Command: "/linux/tools/net/ynl/cli.py --spec /linux/Documentation/netlink/specs/dpll.yaml --dump device-get | " +
+					"python3 /root/custom_scripts/json_encoder.py",
+				Trim: true,
+			},
 		},
 	)
 	if err != nil {
@@ -336,12 +348,16 @@ func selectPin(pinsJSON []byte, clockID uint64) (int32, string, error) { //nolin
 
 	var OnePPSPin, SMA1Pin *NetlinkPin
 
-	log.Debug("entries: ", entries)
+	log.Debugf("selectPin: looking for clockID %d among %d pins", clockID, len(entries))
 
+	matchingPinCount := 0
 	for _, pin := range entries {
 		if pin.ClockID != clockID {
+			log.Debugf("selectPin: skipping pin ID=%d label=%s (clockID %d != %d)", pin.ID, pin.Label, pin.ClockID, clockID)
 			continue
 		}
+		matchingPinCount++
+		log.Debugf("selectPin: found matching pin ID=%d label=%s type=%s", pin.ID, pin.Label, pin.Type)
 
 		switch pin.Label {
 		case OnePPSLabel:
@@ -351,22 +367,44 @@ func selectPin(pinsJSON []byte, clockID uint64) (int32, string, error) { //nolin
 		}
 	}
 
-	choosePPS := true
+	log.Debugf("selectPin: found %d pins matching clockID %d", matchingPinCount, clockID)
 
-	for _, parentDev := range OnePPSPin.ParentDevices {
-		if parentDev.State != ConnectedState {
-			choosePPS = false
-			break
+	choosePPS := false
+	if OnePPSPin != nil {
+		choosePPS = true
+		log.Debugf("selectPin: evaluating 1PPS pin ID=%d with %d parent devices", OnePPSPin.ID, len(OnePPSPin.ParentDevices))
+		for _, parentDev := range OnePPSPin.ParentDevices {
+			log.Debugf("selectPin: 1PPS parent device: direction=%s state=%s", parentDev.Direction, parentDev.State)
+			if parentDev.State != ConnectedState {
+				log.Debugf("selectPin: 1PPS rejected - parent device not connected (state=%s)", parentDev.State)
+				choosePPS = false
+				break
+			}
 		}
+		if choosePPS {
+			log.Debugf("selectPin: 1PPS pin selected")
+		}
+	} else {
+		log.Debugf("selectPin: no 1PPS pin found")
 	}
 
-	chooseSMA1 := true
-
-	for _, parentDev := range SMA1Pin.ParentDevices {
-		if parentDev.Direction != InputDirection || parentDev.State != ConnectedState {
-			chooseSMA1 = false
-			break
+	chooseSMA1 := false
+	if SMA1Pin != nil {
+		chooseSMA1 = true
+		log.Debugf("selectPin: evaluating SMA1 pin ID=%d with %d parent devices", SMA1Pin.ID, len(SMA1Pin.ParentDevices))
+		for _, parentDev := range SMA1Pin.ParentDevices {
+			log.Debugf("selectPin: SMA1 parent device: direction=%s state=%s", parentDev.Direction, parentDev.State)
+			if parentDev.Direction != InputDirection || parentDev.State != ConnectedState {
+				log.Debugf("selectPin: SMA1 rejected - parent device invalid (direction=%s, state=%s)", parentDev.Direction, parentDev.State)
+				chooseSMA1 = false
+				break
+			}
 		}
+		if chooseSMA1 {
+			log.Debugf("selectPin: SMA1 pin selected")
+		}
+	} else {
+		log.Debugf("selectPin: no SMA1 pin found")
 	}
 
 	//nolint:gocritic // this is clearer
@@ -378,7 +416,28 @@ func selectPin(pinsJSON []byte, clockID uint64) (int32, string, error) { //nolin
 		return SMA1Pin.ID, SMA1Label, nil
 	}
 
-	return 0, "", errors.New("failed to determin correct offset pin")
+	// Fallback: find any pin with at least one connected input parent device
+	log.Debugf("selectPin: no 1PPS or SMA1 pin available, looking for any connected input pin")
+	for _, pin := range entries {
+		if pin.ClockID != clockID {
+			continue
+		}
+
+		hasConnectedInput := false
+		for _, parentDev := range pin.ParentDevices {
+			if parentDev.Direction == InputDirection && parentDev.State == ConnectedState {
+				hasConnectedInput = true
+				break
+			}
+		}
+
+		if hasConnectedInput {
+			log.Infof("selectPin: using fallback pin ID=%d label=%s type=%s (no 1PPS/SMA1 available)", pin.ID, pin.Label, pin.Type)
+			return pin.ID, pin.Label, nil
+		}
+	}
+
+	return 0, "", utils.NewRequirementsNotMetError(errors.New("failed to determine correct offset pin: no suitable 1PPS or SMA1 pin found"))
 }
 
 func postProcessDPLLNetlinkClockID(result map[string]string) (map[string]any, error) {
@@ -391,7 +450,31 @@ func postProcessDPLLNetlinkClockID(result map[string]string) (map[string]any, er
 
 	processedResult["clockID"] = clockID
 
+	// Try to select a pin using the NIC's clock ID first
 	offsetPintID, pinType, err := selectPin([]byte(result["dpll-netlink-pins"]), clockID)
+
+	// If no pins match the NIC's clock ID, try using the clock ID from DPLL devices
+	// This handles cases where DPLL is on a separate timing card (e.g., zl3073x)
+	if err != nil {
+		var reqNotMet *utils.RequirementsNotMetError
+		if errors.As(err, &reqNotMet) {
+			log.Debugf("No pins found for NIC clockID %d, trying DPLL device clock IDs", clockID)
+
+			devices := make([]NetlinkStateEntry, 0)
+			if devErr := json.Unmarshal([]byte(result["dpll-netlink-devices"]), &devices); devErr == nil && len(devices) > 0 {
+				// Use the first DPLL device's clock ID as fallback
+				fallbackClockID := devices[0].ClockID
+				log.Infof("Using DPLL device clock ID %d (module: %s) instead of NIC clock ID %d",
+					fallbackClockID, devices[0].Driver, clockID)
+
+				offsetPintID, pinType, err = selectPin([]byte(result["dpll-netlink-pins"]), fallbackClockID)
+				if err == nil {
+					processedResult["clockID"] = fallbackClockID
+				}
+			}
+		}
+	}
+
 	if err != nil {
 		return processedResult, err
 	}

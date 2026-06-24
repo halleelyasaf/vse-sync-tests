@@ -28,6 +28,7 @@ var _ = Describe("Client", func() {
 	When("A clientset is requested with no kubeconfig", func() {
 		It("should return an error", func() {
 			var clientset *clients.Clientset
+
 			clientset, err := clients.GetClientset(notAKubeconfigPath)
 			Expect(err).To(HaveOccurred())
 			Expect(clientset).To(BeNil())

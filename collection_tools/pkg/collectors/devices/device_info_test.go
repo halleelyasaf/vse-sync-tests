@@ -55,8 +55,11 @@ var _ = Describe("NewContainerContext", func() {
 		stderr string
 	}
 
-	var clientset *clients.Clientset
-	var response map[string]Response
+	var (
+		clientset *clients.Clientset
+		response  map[string]Response
+	)
+
 	BeforeEach(func() { //nolint:dupl // this is test setup code
 		clientset = testutils.GetMockedClientSet(testPod)
 		response = make(map[string]Response)
@@ -64,20 +67,27 @@ var _ = Describe("NewContainerContext", func() {
 			reader := bufio.NewReader(options.Stdin)
 			cmd := ""
 			keepReading := true
+
 			var cmdSb65 strings.Builder
+
 			for keepReading {
 				line, prefix, _ := reader.ReadLine()
 				keepReading = prefix
-				cmdSb65.WriteString(string(line))
+
+				cmdSb65.Write(line)
 			}
+
 			cmd += cmdSb65.String()
+
 			resp, ok := response[cmd]
 			if !ok {
 				return []byte(resp.stdout), []byte(resp.stderr), errors.New("Response not found")
 			}
+
 			return []byte(resp.stdout), []byte(resp.stderr), resp.err
 		}
 		clients.NewSPDYExecutor = testutils.NewFakeNewSPDYExecutor(responder, nil)
+
 		devices.ClearDevFetcher()
 	})
 
@@ -115,7 +125,6 @@ var _ = Describe("NewContainerContext", func() {
 			Expect(info.GNSSDev).To(Equal("/dev/" + gnssDev))
 			Expect(info.FirmwareVersion).To(Equal(firmwareVersion))
 			Expect(info.DriverVersion).To(Equal(driverVersion))
-
 		})
 	})
 
@@ -148,7 +157,6 @@ var _ = Describe("NewContainerContext", func() {
 			Expect(info.GNSSDev).To(Equal(""))
 			Expect(info.FirmwareVersion).To(Equal(firmwareVersion))
 			Expect(info.DriverVersion).To(Equal(driverVersion))
-
 		})
 	})
 
@@ -183,7 +191,6 @@ var _ = Describe("NewContainerContext", func() {
 			Expect(info.GNSSDev).To(Equal(""))
 			Expect(info.FirmwareVersion).To(Equal(firmwareVersion))
 			Expect(info.DriverVersion).To(Equal(driverVersion))
-
 		})
 	})
 })

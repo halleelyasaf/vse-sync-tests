@@ -46,7 +46,23 @@ def muxed(file, parsers):
         if line == '':
             file.close()
             return
-        obj = json.loads(line.rstrip(), parse_float=Decimal)
+
+        # Skip empty lines and whitespace-only lines
+        stripped = line.rstrip()
+        if not stripped:
+            continue
+
+        # Try to parse JSON, skip invalid lines
+        try:
+            obj = json.loads(stripped, parse_float=Decimal)
+        except json.JSONDecodeError:
+            # Skip malformed JSON lines silently
+            continue
+
+        # Skip if 'id' or 'data' keys are missing
+        if 'id' not in obj or 'data' not in obj:
+            continue
+
         id_ = obj['id']
         try:
             parser = parsers[id_]

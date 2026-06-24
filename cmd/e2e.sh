@@ -100,7 +100,9 @@ esac
 detect_configured_cards() {
     pushd "$COLLECTORPATH" >/dev/null 2>&1
     echo "Detecting cards configured in ptpconfig. Please wait..."
-    go run main.go detect --nodeName="$NODE_NAME" --kubeconfig="$LOCAL_KUBECONFIG" --use-analyser-format > $DEVJSON
+    # Filter out log lines (starting with 'time=') to get only JSON output
+    go run main.go detect --nodeName="$NODE_NAME" --kubeconfig="$LOCAL_KUBECONFIG" --use-analyser-format --clock-type="$TEST_MODE" | grep -v '^time=' > $DEVJSON
+    popd >/dev/null 2>&1
 }
 
 
@@ -185,7 +187,7 @@ verify_env(){
     local junit_template
     junit_template=$(printf '.[].data + {"timestamp": "%s", "duration": 0}' "$dt")
     set +e
-    LOCAL_INTERFACE_NAME=$(jq '.[] | select(.primary == true).name' $DEVJSON)
+    LOCAL_INTERFACE_NAME=$(jq -r '.[] | select(.primary == true).name' $DEVJSON)
     go run main.go env verify --interface="$LOCAL_INTERFACE_NAME" --nodeName="$NODE_NAME" --kubeconfig="$LOCAL_KUBECONFIG" --use-analyser-format --clock-type="$TEST_MODE" > $ENVJSONRAW
 
     if [ $? -gt 0 ]
@@ -233,7 +235,7 @@ collect_data(){
     done
 
     echo "Waiting on collectors ${collectorPids[@]}"
-    wait -f "${collectorPids[@]}"
+    wait "${collectorPids[@]}"
 
     go run main.go stop-debug --nodeName="$NODE_NAME" --kubeconfig="$LOCAL_KUBECONFIG"
 

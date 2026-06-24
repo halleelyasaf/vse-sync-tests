@@ -31,6 +31,7 @@ var verifyEnvCmd = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "Error: Invalid clock type '%s'. Must be either '%s' or '%s'\n", clockType, constants.ClockTypeGM, constants.ClockTypeBC)
 			os.Exit(1)
 		}
+
 		verify.Verify(ptpInterface, kubeConfig, useAnalyserJSON, nodeName, clockTypeUpper)
 	},
 }

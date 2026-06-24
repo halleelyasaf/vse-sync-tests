@@ -32,9 +32,15 @@ func getDevInfoValidations(
 	clockType string,
 ) []validations.Validation {
 	ctx, err := contexts.GetPTPDaemonContext(clientset, ptpNodeName)
-	utils.IfErrorExitOrPanic(err)
+	if err != nil {
+		log.Warnf("failed to get PTP daemon context: %v", err)
+		return []validations.Validation{}
+	}
 	devInfo, err := devices.GetPTPDeviceInfo(interfaceName, ctx, clockType)
-	utils.IfErrorExitOrPanic(err)
+	if err != nil {
+		log.Warnf("failed to get device info for %s: %v", interfaceName, err)
+		return []validations.Validation{}
+	}
 
 	devDetails := validations.NewDeviceDetails(devInfo)
 	devFirmware := validations.NewDeviceFirmware(devInfo)
@@ -48,9 +54,15 @@ func getGPSVersionValidations(
 	ptpNodeName string,
 ) []validations.Validation {
 	ctx, err := contexts.GetPTPDaemonContext(clientset, ptpNodeName)
-	utils.IfErrorExitOrPanic(err)
+	if err != nil {
+		log.Warnf("failed to get PTP daemon context for GPS validation: %v", err)
+		return []validations.Validation{}
+	}
 	gnssVersions, err := devices.GetGPSVersions(ctx)
-	utils.IfErrorExitOrPanic(err)
+	if err != nil {
+		log.Warnf("failed to get GPS versions: %v", err)
+		return []validations.Validation{}
+	}
 
 	return []validations.Validation{
 		validations.NewGNSS(gnssVersions),
@@ -66,7 +78,10 @@ func getGPSStatusValidation(
 	ptpNodeName string,
 ) []validations.Validation {
 	ctx, err := contexts.GetPTPDaemonContext(clientset, ptpNodeName)
-	utils.IfErrorExitOrPanic(err)
+	if err != nil {
+		log.Warnf("failed to get PTP daemon context for GPS status validation: %v", err)
+		return []validations.Validation{}
+	}
 
 	// If we need to do this for more validations then consider a generic
 	var (
@@ -87,7 +102,10 @@ func getGPSStatusValidation(
 		time.Sleep(time.Second)
 	}
 
-	utils.IfErrorExitOrPanic(err)
+	if err != nil {
+		log.Warnf("failed to get GPS navigation data: %v", err)
+		return []validations.Validation{}
+	}
 
 	return []validations.Validation{
 		antCheck,
@@ -98,7 +116,10 @@ func getGPSStatusValidation(
 func getValidations(interfaceName, ptpNodeName, kubeConfig, clockType string) []validations.Validation {
 	checks := make([]validations.Validation, 0)
 	clientset, err := clients.GetClientset(kubeConfig)
-	utils.IfErrorExitOrPanic(err)
+	if err != nil {
+		log.Warnf("failed to get Kubernetes clientset: %v", err)
+		return checks
+	}
 
 	checks = append(checks, getDevInfoValidations(clientset, interfaceName, ptpNodeName, clockType)...)
 
@@ -120,7 +141,10 @@ func getValidations(interfaceName, ptpNodeName, kubeConfig, clockType string) []
 
 func reportAnalyserJSON(results []*ValidationResult) {
 	callback, err := callbacks.SetupCallback("-", callbacks.AnalyserJSON)
-	utils.IfErrorExitOrPanic(err)
+	if err != nil {
+		log.Warnf("failed to setup analyser JSON callback: %v", err)
+		return
+	}
 
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].validation.GetOrder() < results[j].validation.GetOrder()
@@ -182,7 +206,8 @@ func report(results []*ValidationResult, useAnalyserJSON bool) {
 		}
 
 		err := utils.MakeCompositeInvalidEnvError(validationsErrors)
-		utils.IfErrorExitOrPanic(err)
+		log.Errorf("validation failures detected: %v", err)
+		os.Exit(1)
 	case len(unknown) > 0:
 		// If only unknowns print this message
 		fmt.Println("Some checks did not complete, it is likely something is not correct in the environment") //nolint:forbidigo // This to print out to the user
