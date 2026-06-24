@@ -13,6 +13,7 @@ REPORTGENPATH=$TESTROOT/reporting
 REPORTPRIVSUTGENPATH=$TESTROOT/vse-sync-sut
 TDPATH=$ANALYSERPATH/testdrive/src
 PPPATH=$ANALYSERPATH/postprocess/src
+TESTCOMMONPATH=$TESTROOT/tests/common
 
 OUTPUTDIR=$TESTROOT/data
 DATADIR=$OUTPUTDIR/collected # Raw collected data/logs
@@ -102,6 +103,11 @@ detect_configured_cards() {
     echo "Detecting cards configured in ptpconfig. Please wait..."
     # Filter out log lines (starting with 'time=') to get only JSON output
     go run main.go detect --nodeName="$NODE_NAME" --kubeconfig="$LOCAL_KUBECONFIG" --use-analyser-format --clock-type="$TEST_MODE" | grep -v '^time=' > $DEVJSON
+    # Explicitly check detect command exit status (first command in pipeline)
+    if [ "${PIPESTATUS[0]}" -ne 0 ]; then
+        echo "Error: detect command failed" >&2
+        exit 1
+    fi
     popd >/dev/null 2>&1
 }
 
@@ -188,6 +194,15 @@ verify_env(){
     junit_template=$(printf '.[].data + {"timestamp": "%s", "duration": 0}' "$dt")
     set +e
     LOCAL_INTERFACE_NAME=$(jq -r '.[] | select(.primary == true).name' $DEVJSON)
+    local primary_count=$(echo "$LOCAL_INTERFACE_NAME" | grep -c '^')
+    if [ "$primary_count" -eq 0 ]; then
+        echo "Error: No primary interface found in $DEVJSON" >&2
+        exit 1
+    elif [ "$primary_count" -gt 1 ]; then
+        echo "Error: Multiple primary interfaces found in $DEVJSON:" >&2
+        echo "$LOCAL_INTERFACE_NAME" >&2
+        exit 1
+    fi
     go run main.go env verify --interface="$LOCAL_INTERFACE_NAME" --nodeName="$NODE_NAME" --kubeconfig="$LOCAL_KUBECONFIG" --use-analyser-format --clock-type="$TEST_MODE" > $ENVJSONRAW
 
     if [ $? -gt 0 ]
@@ -307,6 +322,15 @@ analyse_data() {
 
     # Get primary interface name for PTP4L tests
     PRIMARY_INTERFACE_NAME=$(jq -r '.[] | select(.primary == true).name' $DEVJSON)
+    local primary_count=$(echo "$PRIMARY_INTERFACE_NAME" | grep -c '^')
+    if [ "$primary_count" -eq 0 ]; then
+        echo "Error: No primary interface found in $DEVJSON" >&2
+        exit 1
+    elif [ "$primary_count" -gt 1 ]; then
+        echo "Error: Multiple primary interfaces found in $DEVJSON:" >&2
+        echo "$PRIMARY_INTERFACE_NAME" >&2
+        exit 1
+    fi
 
     # Only process GNSS data for T-GM mode (BC doesn't use GNSS constellation tests)
     if [ "$TEST_MODE" = "gm" ]; then
@@ -373,7 +397,7 @@ EOF
         fi
     done
 
-    env PYTHONPATH=$TDPATH:$PPPATH python3 -m testdrive.run --basedir="$ANALYSERPATH/tests" --imagedir="$PLOTDIR" "$BASEURL_TEST_IDS" $ARTEFACTDIR/testdrive_config.json
+    env PYTHONPATH=$TDPATH:$PPPATH:$TESTCOMMONPATH python3 -m testdrive.run --basedir="$ANALYSERPATH/tests" --imagedir="$PLOTDIR" "$BASEURL_TEST_IDS" $ARTEFACTDIR/testdrive_config.json
 
     popd >/dev/null 2>&1
 }

@@ -7,44 +7,6 @@ import re
 from datetime import (datetime, timezone)
 from decimal import (Decimal, InvalidOperation)
 
-# Python 3.6 compatibility - fromisoformat was added in Python 3.7
-def _datetime_fromisoformat(date_string):
-    """Compatibility wrapper for datetime.fromisoformat"""
-    if hasattr(datetime, 'fromisoformat'):
-        return datetime.fromisoformat(date_string)
-    else:
-        # Python 3.6 compatibility implementation
-        original = date_string
-
-        # Handle 'Z' suffix for UTC
-        if date_string.endswith('Z'):
-            date_string = date_string[:-1] + '+00:00'
-
-        # Python 3.6's strptime doesn't like colons in timezone offset
-        # Convert +00:00 to +0000
-        import re as _re
-        date_string = _re.sub(r'([+-]\d{2}):(\d{2})$', r'\1\2', date_string)
-
-        # Python's %f only handles up to 6 digits of fractional seconds
-        # Truncate longer fractional parts
-        date_string = _re.sub(r'\.(\d{6})\d+', r'.\1', date_string)
-
-        # Try to parse with timezone
-        for fmt in [
-            '%Y-%m-%dT%H:%M:%S.%f%z',
-            '%Y-%m-%dT%H:%M:%S%z',
-            '%Y-%m-%dT%H:%M:%S.%f',
-            '%Y-%m-%dT%H:%M:%S',
-        ]:
-            try:
-                dt = datetime.strptime(date_string, fmt)
-                # If no timezone info, assume UTC
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
-                return dt
-            except ValueError:
-                continue
-        raise ValueError("time data '{}' does not match ISO format".format(original))
 
 # sufficient regex to extract the whole decimal fraction part
 RE_ISO8601_DECFRAC = re.compile(
@@ -63,7 +25,7 @@ def parse_timestamp_abs(val):
     Raise :class:`ValueError` otherwise.
     """
     try:
-        dtv = _datetime_fromisoformat(val)
+        dtv = datetime.fromisoformat(val)
     except TypeError:
         return None
     except ValueError:
@@ -74,7 +36,7 @@ def parse_timestamp_abs(val):
             return None
         # parse without decimal fraction, with 'Z' substituted
         tzv = '+00:00' if match.group(3) == 'Z' else match.group(3)
-        dtv = _datetime_fromisoformat(match.group(1) + tzv)
+        dtv = datetime.fromisoformat(match.group(1) + tzv)
     else:
         match = RE_ISO8601_DECFRAC.match(val)
         if match is None:
@@ -82,7 +44,7 @@ def parse_timestamp_abs(val):
     # Check if timezone is UTC (handle both aware and naive datetimes)
     if dtv.tzinfo is not None and dtv.tzinfo.utcoffset(None).total_seconds() != 0:
         raise ValueError(val)
-    # If naive, assume UTC (for Python 3.6 compatibility)
+    # If naive, assume UTC
     if dtv.tzinfo is None:
         dtv = dtv.replace(tzinfo=timezone.utc)
     # `dtv` may truncate decimal fraction: use decimal fraction from `val`

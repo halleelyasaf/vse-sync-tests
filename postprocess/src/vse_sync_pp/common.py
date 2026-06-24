@@ -3,15 +3,7 @@
 """Common code for command line tools"""
 
 import sys
-try:
-    from contextlib import nullcontext
-except ImportError:
-    # Python 3.6 compatibility - nullcontext was added in Python 3.7
-    from contextlib import contextmanager
-    @contextmanager
-    def nullcontext(enter_result=None):
-        yield enter_result
-
+from contextlib import nullcontext
 import json
 from decimal import Decimal
 import numpy

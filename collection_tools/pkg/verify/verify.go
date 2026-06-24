@@ -33,13 +33,11 @@ func getDevInfoValidations(
 ) []validations.Validation {
 	ctx, err := contexts.GetPTPDaemonContext(clientset, ptpNodeName)
 	if err != nil {
-		log.Warnf("failed to get PTP daemon context: %v", err)
-		return []validations.Validation{}
+		log.Fatalf("failed to get PTP daemon context: %v", err)
 	}
 	devInfo, err := devices.GetPTPDeviceInfo(interfaceName, ctx, clockType)
 	if err != nil {
-		log.Warnf("failed to get device info for %s: %v", interfaceName, err)
-		return []validations.Validation{}
+		log.Fatalf("failed to get device info for %s: %v", interfaceName, err)
 	}
 
 	devDetails := validations.NewDeviceDetails(devInfo)
@@ -117,8 +115,7 @@ func getValidations(interfaceName, ptpNodeName, kubeConfig, clockType string) []
 	checks := make([]validations.Validation, 0)
 	clientset, err := clients.GetClientset(kubeConfig)
 	if err != nil {
-		log.Warnf("failed to get Kubernetes clientset: %v", err)
-		return checks
+		log.Fatalf("failed to get Kubernetes clientset: %v", err)
 	}
 
 	checks = append(checks, getDevInfoValidations(clientset, interfaceName, ptpNodeName, clockType)...)
@@ -142,8 +139,7 @@ func getValidations(interfaceName, ptpNodeName, kubeConfig, clockType string) []
 func reportAnalyserJSON(results []*ValidationResult) {
 	callback, err := callbacks.SetupCallback("-", callbacks.AnalyserJSON)
 	if err != nil {
-		log.Warnf("failed to setup analyser JSON callback: %v", err)
-		return
+		log.Fatalf("failed to setup analyser JSON callback: %v", err)
 	}
 
 	sort.Slice(results, func(i, j int) bool {
@@ -207,10 +203,11 @@ func report(results []*ValidationResult, useAnalyserJSON bool) {
 
 		err := utils.MakeCompositeInvalidEnvError(validationsErrors)
 		log.Errorf("validation failures detected: %v", err)
-		os.Exit(1)
+		os.Exit(int(utils.InvalidEnv))
 	case len(unknown) > 0:
-		// If only unknowns print this message
+		// If only unknowns print this message and exit with error
 		fmt.Println("Some checks did not complete, it is likely something is not correct in the environment") //nolint:forbidigo // This to print out to the user
+		os.Exit(int(utils.InvalidEnv))
 	default:
 		fmt.Println("No issues found.") //nolint:forbidigo // This to print out to the user
 	}
