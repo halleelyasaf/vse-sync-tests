@@ -193,16 +193,16 @@ verify_env(){
     local junit_template
     junit_template=$(printf '.[].data + {"timestamp": "%s", "duration": 0}' "$dt")
     set +e
-    LOCAL_INTERFACE_NAME=$(jq -r '.[] | select(.primary == true).name' $DEVJSON)
-    local primary_count=$(echo "$LOCAL_INTERFACE_NAME" | grep -c '^')
+    local primary_count=$(jq '[.[] | select(.primary == true)] | length' $DEVJSON)
     if [ "$primary_count" -eq 0 ]; then
         echo "Error: No primary interface found in $DEVJSON" >&2
         exit 1
     elif [ "$primary_count" -gt 1 ]; then
-        echo "Error: Multiple primary interfaces found in $DEVJSON:" >&2
-        echo "$LOCAL_INTERFACE_NAME" >&2
+        echo "Error: Multiple primary interfaces found in $DEVJSON" >&2
+        jq -r '.[] | select(.primary == true).name' $DEVJSON >&2
         exit 1
     fi
+    LOCAL_INTERFACE_NAME=$(jq -r '.[] | select(.primary == true).name' $DEVJSON)
     go run main.go env verify --interface="$LOCAL_INTERFACE_NAME" --nodeName="$NODE_NAME" --kubeconfig="$LOCAL_KUBECONFIG" --use-analyser-format --clock-type="$TEST_MODE" > $ENVJSONRAW
 
     if [ $? -gt 0 ]
@@ -321,16 +321,16 @@ analyse_data() {
     pushd "$ANALYSERPATH" >/dev/null 2>&1
 
     # Get primary interface name for PTP4L tests
-    PRIMARY_INTERFACE_NAME=$(jq -r '.[] | select(.primary == true).name' $DEVJSON)
-    local primary_count=$(echo "$PRIMARY_INTERFACE_NAME" | grep -c '^')
+    local primary_count=$(jq '[.[] | select(.primary == true)] | length' $DEVJSON)
     if [ "$primary_count" -eq 0 ]; then
         echo "Error: No primary interface found in $DEVJSON" >&2
         exit 1
     elif [ "$primary_count" -gt 1 ]; then
-        echo "Error: Multiple primary interfaces found in $DEVJSON:" >&2
-        echo "$PRIMARY_INTERFACE_NAME" >&2
+        echo "Error: Multiple primary interfaces found in $DEVJSON" >&2
+        jq -r '.[] | select(.primary == true).name' $DEVJSON >&2
         exit 1
     fi
+    PRIMARY_INTERFACE_NAME=$(jq -r '.[] | select(.primary == true).name' $DEVJSON)
 
     # Only process GNSS data for T-GM mode (BC doesn't use GNSS constellation tests)
     if [ "$TEST_MODE" = "gm" ]; then
