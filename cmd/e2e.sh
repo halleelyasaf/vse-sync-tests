@@ -193,7 +193,11 @@ verify_env(){
     local junit_template
     junit_template=$(printf '.[].data + {"timestamp": "%s", "duration": 0}' "$dt")
     set +e
-    local primary_count=$(jq '[.[] | select(.primary == true)] | length' $DEVJSON)
+    local primary_count=$(jq '[.[] | select(.primary == true)] | length' $DEVJSON 2>/dev/null)
+    if [ $? -ne 0 ] || [ -z "$primary_count" ]; then
+        echo "Error: Failed to parse $DEVJSON" >&2
+        exit 1
+    fi
     if [ "$primary_count" -eq 0 ]; then
         echo "Error: No primary interface found in $DEVJSON" >&2
         exit 1
@@ -321,7 +325,11 @@ analyse_data() {
     pushd "$ANALYSERPATH" >/dev/null 2>&1
 
     # Get primary interface name for PTP4L tests
-    local primary_count=$(jq '[.[] | select(.primary == true)] | length' $DEVJSON)
+    local primary_count=$(jq '[.[] | select(.primary == true)] | length' $DEVJSON 2>/dev/null)
+    if [ $? -ne 0 ] || [ -z "$primary_count" ]; then
+        echo "Error: Failed to parse $DEVJSON" >&2
+        exit 1
+    fi
     if [ "$primary_count" -eq 0 ]; then
         echo "Error: No primary interface found in $DEVJSON" >&2
         exit 1
