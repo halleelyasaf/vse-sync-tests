@@ -18,8 +18,8 @@ def parse_timestamp_abs(val):
     """Return a :class:`Decimal` from `val`, an absolute timestamp string.
 
     Accepted absolute timestamp strings are ISO 8601 format with restrictions.
-    The string must: specify UTC timezone (or be naive, which is treated as UTC),
-    supply time in seconds, specify a decimal fractional part with a decimal mark of '.'.
+    The string must: explicitly specify UTC timezone, supply time in seconds,
+    specify a decimal fractional part with a decimal mark of '.'.
 
     Return None if `val` is not a string or is not an ISO 8601 format string.
     Raise :class:`ValueError` otherwise.

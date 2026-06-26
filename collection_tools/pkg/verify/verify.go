@@ -32,13 +32,9 @@ func getDevInfoValidations(
 	clockType string,
 ) []validations.Validation {
 	ctx, err := contexts.GetPTPDaemonContext(clientset, ptpNodeName)
-	if err != nil {
-		log.Fatalf("failed to get PTP daemon context: %v", err)
-	}
+	utils.IfErrorExitOrPanic(err)
 	devInfo, err := devices.GetPTPDeviceInfo(interfaceName, ctx, clockType)
-	if err != nil {
-		log.Fatalf("failed to get device info for %s: %v", interfaceName, err)
-	}
+	utils.IfErrorExitOrPanic(err)
 
 	devDetails := validations.NewDeviceDetails(devInfo)
 	devFirmware := validations.NewDeviceFirmware(devInfo)
@@ -52,15 +48,9 @@ func getGPSVersionValidations(
 	ptpNodeName string,
 ) []validations.Validation {
 	ctx, err := contexts.GetPTPDaemonContext(clientset, ptpNodeName)
-	if err != nil {
-		log.Warnf("failed to get PTP daemon context for GPS validation: %v", err)
-		return []validations.Validation{}
-	}
+	utils.IfErrorExitOrPanic(err)
 	gnssVersions, err := devices.GetGPSVersions(ctx)
-	if err != nil {
-		log.Warnf("failed to get GPS versions: %v", err)
-		return []validations.Validation{}
-	}
+	utils.IfErrorExitOrPanic(err)
 
 	return []validations.Validation{
 		validations.NewGNSS(gnssVersions),
@@ -76,10 +66,7 @@ func getGPSStatusValidation(
 	ptpNodeName string,
 ) []validations.Validation {
 	ctx, err := contexts.GetPTPDaemonContext(clientset, ptpNodeName)
-	if err != nil {
-		log.Warnf("failed to get PTP daemon context for GPS status validation: %v", err)
-		return []validations.Validation{}
-	}
+	utils.IfErrorExitOrPanic(err)
 
 	// If we need to do this for more validations then consider a generic
 	var (
@@ -100,10 +87,7 @@ func getGPSStatusValidation(
 		time.Sleep(time.Second)
 	}
 
-	if err != nil {
-		log.Warnf("failed to get GPS navigation data: %v", err)
-		return []validations.Validation{}
-	}
+	utils.IfErrorExitOrPanic(err)
 
 	return []validations.Validation{
 		antCheck,
@@ -114,9 +98,7 @@ func getGPSStatusValidation(
 func getValidations(interfaceName, ptpNodeName, kubeConfig, clockType string) []validations.Validation {
 	checks := make([]validations.Validation, 0)
 	clientset, err := clients.GetClientset(kubeConfig)
-	if err != nil {
-		log.Fatalf("failed to get Kubernetes clientset: %v", err)
-	}
+	utils.IfErrorExitOrPanic(err)
 
 	checks = append(checks, getDevInfoValidations(clientset, interfaceName, ptpNodeName, clockType)...)
 
@@ -138,9 +120,7 @@ func getValidations(interfaceName, ptpNodeName, kubeConfig, clockType string) []
 
 func reportAnalyserJSON(results []*ValidationResult) {
 	callback, err := callbacks.SetupCallback("-", callbacks.AnalyserJSON)
-	if err != nil {
-		log.Fatalf("failed to setup analyser JSON callback: %v", err)
-	}
+	utils.IfErrorExitOrPanic(err)
 
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].validation.GetOrder() < results[j].validation.GetOrder()
@@ -202,12 +182,10 @@ func report(results []*ValidationResult, useAnalyserJSON bool) {
 		}
 
 		err := utils.MakeCompositeInvalidEnvError(validationsErrors)
-		log.Errorf("validation failures detected: %v", err)
-		os.Exit(int(utils.InvalidEnv))
+		utils.IfErrorExitOrPanic(err)
 	case len(unknown) > 0:
-		// If only unknowns print this message and exit with error
+		// If only unknowns print this message
 		fmt.Println("Some checks did not complete, it is likely something is not correct in the environment") //nolint:forbidigo // This to print out to the user
-		os.Exit(int(utils.InvalidEnv))
 	default:
 		fmt.Println("No issues found.") //nolint:forbidigo // This to print out to the user
 	}

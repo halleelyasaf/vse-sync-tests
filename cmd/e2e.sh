@@ -101,13 +101,31 @@ esac
 detect_configured_cards() {
     pushd "$COLLECTORPATH" >/dev/null 2>&1
     echo "Detecting cards configured in ptpconfig. Please wait..."
-    # Filter out log lines (starting with 'time=') to get only JSON output
-    go run main.go detect --nodeName="$NODE_NAME" --kubeconfig="$LOCAL_KUBECONFIG" --use-analyser-format --clock-type="$TEST_MODE" | grep -v '^time=' > $DEVJSON
-    # Explicitly check detect command exit status (first command in pipeline)
-    if [ "${PIPESTATUS[0]}" -ne 0 ]; then
-        echo "Error: detect command failed" >&2
+    # Save all output, separate JSON from log lines
+    local tmpout="${DEVJSON}.tmp"
+    local tmplog="${DEVJSON}.log"
+    go run main.go detect --nodeName="$NODE_NAME" --kubeconfig="$LOCAL_KUBECONFIG" --use-analyser-format --clock-type="$TEST_MODE" > "$tmpout" 2>&1
+    local detect_status=$?
+
+    # Separate log lines (starting with 'time=') from JSON output
+    grep '^time=' "$tmpout" > "$tmplog" 2>/dev/null || true
+    grep -v '^time=' "$tmpout" > "$DEVJSON"
+
+    # Check detect command exit status
+    if [ "$detect_status" -ne 0 ]; then
+        echo "Error: detect command failed with exit code $detect_status" >&2
+        if [ -s "$tmplog" ]; then
+            echo "Log output:" >&2
+            cat "$tmplog" >&2
+        fi
+        if [ -s "$tmpout" ]; then
+            echo "Full output:" >&2
+            cat "$tmpout" >&2
+        fi
+        rm -f "$tmpout" "$tmplog"
         exit 1
     fi
+    rm -f "$tmpout" "$tmplog"
     popd >/dev/null 2>&1
 }
 
@@ -254,7 +272,7 @@ collect_data(){
     done
 
     echo "Waiting on collectors ${collectorPids[@]}"
-    wait "${collectorPids[@]}"
+    wait -f "${collectorPids[@]}"
 
     go run main.go stop-debug --nodeName="$NODE_NAME" --kubeconfig="$LOCAL_KUBECONFIG"
 
@@ -324,20 +342,7 @@ EOF
 analyse_data() {
     pushd "$ANALYSERPATH" >/dev/null 2>&1
 
-    # Get primary interface name for PTP4L tests
-    local primary_count=$(jq '[.[] | select(.primary == true)] | length' $DEVJSON 2>/dev/null)
-    if [ $? -ne 0 ] || [ -z "$primary_count" ]; then
-        echo "Error: Failed to parse $DEVJSON" >&2
-        exit 1
-    fi
-    if [ "$primary_count" -eq 0 ]; then
-        echo "Error: No primary interface found in $DEVJSON" >&2
-        exit 1
-    elif [ "$primary_count" -gt 1 ]; then
-        echo "Error: Multiple primary interfaces found in $DEVJSON" >&2
-        jq -r '.[] | select(.primary == true).name' $DEVJSON >&2
-        exit 1
-    fi
+    # Get primary interface name for PTP4L tests (already validated in verify_env)
     PRIMARY_INTERFACE_NAME=$(jq -r '.[] | select(.primary == true).name' $DEVJSON)
 
     # Only process GNSS data for T-GM mode (BC doesn't use GNSS constellation tests)
