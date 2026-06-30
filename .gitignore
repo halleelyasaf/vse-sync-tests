@@ -197,3 +197,7 @@ pyrightconfig.json
 ### Go ###
 vendor/
 .DS_Store
+
+# Compiled Go binaries
+collection_tools/collection_tools
+

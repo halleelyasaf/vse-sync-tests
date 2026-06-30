@@ -83,7 +83,6 @@ var _ = Describe("Callbacks", func() {
 			Expect(mockedFile.open).To(BeFalse())
 		})
 	})
-
 })
 
 func TestCommand(t *testing.T) {

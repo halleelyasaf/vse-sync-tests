@@ -24,7 +24,6 @@ func init() {
 }
 
 func isIn(name string, arr []string) bool {
-
 	return slices.Contains(arr, name)
 }
 

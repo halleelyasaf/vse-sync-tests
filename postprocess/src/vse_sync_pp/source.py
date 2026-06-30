@@ -3,7 +3,10 @@
 """Log message sources."""
 
 import json
+import logging
 from decimal import Decimal
+
+log = logging.getLogger(__name__)
 
 
 def logged(file, parser):
@@ -41,12 +44,35 @@ def muxed(file, parsers):
 
     `file` is closed just before returning.
     """
+    line_number = 0
     while True:
         line = file.readline()
+        line_number += 1
         if line == '':
             file.close()
             return
-        obj = json.loads(line.rstrip(), parse_float=Decimal)
+
+        # Skip empty lines and whitespace-only lines
+        stripped = line.rstrip()
+        if not stripped:
+            continue
+
+        # Try to parse JSON, skip invalid lines
+        try:
+            obj = json.loads(stripped, parse_float=Decimal)
+        except json.JSONDecodeError as e:
+            # Log malformed JSON with context, then skip
+            preview = stripped[:80] + '...' if len(stripped) > 80 else stripped
+            log.warning(
+                "Skipping malformed JSON at line %d: %s (content: %r)",
+                line_number, e, preview
+            )
+            continue
+
+        # Skip if 'id' or 'data' keys are missing
+        if 'id' not in obj or 'data' not in obj:
+            continue
+
         id_ = obj['id']
         try:
             parser = parsers[id_]

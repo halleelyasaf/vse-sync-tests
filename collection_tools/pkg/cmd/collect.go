@@ -61,6 +61,7 @@ var collectCmd = &cobra.Command{
 		if requestedDuration.Nanoseconds() < 0 {
 			log.Panicf("Requested duration must be positive")
 		}
+
 		utils.IfErrorExitOrPanic(err)
 
 		for _, c := range collectorNames {
@@ -73,10 +74,12 @@ var collectCmd = &cobra.Command{
 
 		if strings.Contains(tempDir, "~") {
 			var usr *user.User
+
 			usr, err = user.Current()
 			if err != nil {
 				log.Fatal("Failed to fetch current user so could not resolve tempdir")
 			}
+
 			if tempDir == "~" {
 				tempDir = usr.HomeDir
 			} else if strings.HasPrefix(tempDir, "~/") {

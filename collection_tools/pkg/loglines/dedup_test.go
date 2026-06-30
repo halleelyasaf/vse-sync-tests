@@ -49,6 +49,7 @@ var _ = Describe("Dedup AB tests", func() {
 			if err != nil {
 				Panic()
 			}
+
 			dl1, dl2 := loglines.DedupAB(lineSlice.Lines, lineSlice.Lines)
 			Expect(dl1).To(BeEmpty())
 			Expect(dl2).To(Equal(lineSlice.Lines))
@@ -60,6 +61,7 @@ var _ = Describe("Dedup AB tests", func() {
 			if err != nil {
 				Panic()
 			}
+
 			dl1, dl2 := loglines.DedupAB(lineSlice.Lines[:100], lineSlice.Lines[200:300])
 			Expect(dl1).To(Equal(lineSlice.Lines[:100]))
 			Expect(dl2).To(Equal(lineSlice.Lines[200:300]))
@@ -71,6 +73,7 @@ var _ = Describe("Dedup AB tests", func() {
 			if err != nil {
 				Panic()
 			}
+
 			dl1, dl2 := loglines.DedupAB(lineSlice.Lines[:200], lineSlice.Lines[100:300])
 			Expect(dl1).To(Equal(lineSlice.Lines[:100]))
 			Expect(dl2).To(Equal(lineSlice.Lines[100:300]))
@@ -82,6 +85,7 @@ var _ = Describe("Dedup AB tests", func() {
 			if err != nil {
 				Panic()
 			}
+
 			dl1, dl2 := loglines.DedupAB(lineSlice.Lines[:200], lineSlice.Lines[:300])
 			Expect(dl1).To(BeEmpty())
 			Expect(dl2).To(Equal(lineSlice.Lines[:300]))
@@ -94,6 +98,7 @@ var _ = Describe("Dedup AB tests", func() {
 			if err != nil {
 				Panic()
 			}
+
 			dl1, dl2 := loglines.DedupAB(lineSlice.Lines[1:200], lineSlice.Lines[:300])
 			Expect(dl1).To(BeEmpty())
 			Expect(dl2).To(Equal(lineSlice.Lines[:300]))
@@ -105,13 +110,17 @@ var _ = Describe("Dedup AB tests", func() {
 			if err != nil {
 				Panic()
 			}
+
 			firstSet := make([]*loglines.ProcessedLine, 0)
+
 			for i, line := range lineSlice.Lines[:200] {
 				if i%3 == 0 {
 					continue
 				}
+
 				firstSet = append(firstSet, line)
 			}
+
 			dl1, dl2 := loglines.DedupAB(firstSet, lineSlice.Lines[:300])
 			Expect(dl1).To(BeEmpty())
 			Expect(dl2).To(Equal(lineSlice.Lines[:300]))
@@ -123,13 +132,17 @@ var _ = Describe("Dedup AB tests", func() {
 			if err != nil {
 				Panic()
 			}
+
 			secondSet := make([]*loglines.ProcessedLine, 0)
+
 			for i, line := range lineSlice.Lines[:300] {
 				if i%3 == 0 {
 					continue
 				}
+
 				secondSet = append(secondSet, line)
 			}
+
 			dl1, dl2 := loglines.DedupAB(secondSet, lineSlice.Lines[:300])
 			Expect(dl1).To(BeEmpty())
 			Expect(dl2).To(Equal(lineSlice.Lines[:300]))

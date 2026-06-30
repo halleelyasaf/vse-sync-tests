@@ -7,6 +7,7 @@ import re
 from datetime import (datetime, timezone)
 from decimal import (Decimal, InvalidOperation)
 
+
 # sufficient regex to extract the whole decimal fraction part
 RE_ISO8601_DECFRAC = re.compile(
     r'^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\.(\d+)(.*)$'
@@ -40,10 +41,14 @@ def parse_timestamp_abs(val):
         match = RE_ISO8601_DECFRAC.match(val)
         if match is None:
             raise ValueError(val)
-    if dtv.tzinfo != timezone.utc:
+    # Check if timezone is UTC (handle both aware and naive datetimes)
+    if dtv.tzinfo is not None and dtv.tzinfo.utcoffset(None).total_seconds() != 0:
         raise ValueError(val)
+    # If naive, assume UTC
+    if dtv.tzinfo is None:
+        dtv = dtv.replace(tzinfo=timezone.utc)
     # `dtv` may truncate decimal fraction: use decimal fraction from `val`
-    return Decimal(f'{int(dtv.timestamp())}.{match.group(2)}')
+    return Decimal('{}.{}'.format(int(dtv.timestamp()), match.group(2)))
 
 
 def parse_decimal(val):

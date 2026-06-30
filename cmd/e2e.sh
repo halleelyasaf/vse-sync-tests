@@ -13,6 +13,7 @@ REPORTGENPATH=$TESTROOT/reporting
 REPORTPRIVSUTGENPATH=$TESTROOT/vse-sync-sut
 TDPATH=$ANALYSERPATH/testdrive/src
 PPPATH=$ANALYSERPATH/postprocess/src
+TESTCOMMONPATH=$TESTROOT/tests/common
 
 OUTPUTDIR=$TESTROOT/data
 DATADIR=$OUTPUTDIR/collected # Raw collected data/logs
@@ -100,7 +101,32 @@ esac
 detect_configured_cards() {
     pushd "$COLLECTORPATH" >/dev/null 2>&1
     echo "Detecting cards configured in ptpconfig. Please wait..."
-    go run main.go detect --nodeName="$NODE_NAME" --kubeconfig="$LOCAL_KUBECONFIG" --use-analyser-format > $DEVJSON
+    # Save all output, separate JSON from log lines
+    local tmpout="${DEVJSON}.tmp"
+    local tmplog="${DEVJSON}.log"
+    go run main.go detect --nodeName="$NODE_NAME" --kubeconfig="$LOCAL_KUBECONFIG" --use-analyser-format --clock-type="$TEST_MODE" > "$tmpout" 2>&1
+    local detect_status=$?
+
+    # Separate log lines (starting with 'time=') from JSON output
+    grep '^time=' "$tmpout" > "$tmplog" 2>/dev/null || true
+    grep -v '^time=' "$tmpout" > "$DEVJSON"
+
+    # Check detect command exit status
+    if [ "$detect_status" -ne 0 ]; then
+        echo "Error: detect command failed with exit code $detect_status" >&2
+        if [ -s "$tmplog" ]; then
+            echo "Log output:" >&2
+            cat "$tmplog" >&2
+        fi
+        if [ -s "$tmpout" ]; then
+            echo "Full output:" >&2
+            cat "$tmpout" >&2
+        fi
+        rm -f "$tmpout" "$tmplog"
+        exit 1
+    fi
+    rm -f "$tmpout" "$tmplog"
+    popd >/dev/null 2>&1
 }
 
 
@@ -185,7 +211,20 @@ verify_env(){
     local junit_template
     junit_template=$(printf '.[].data + {"timestamp": "%s", "duration": 0}' "$dt")
     set +e
-    LOCAL_INTERFACE_NAME=$(jq '.[] | select(.primary == true).name' $DEVJSON)
+    local primary_count=$(jq '[.[] | select(.primary == true)] | length' $DEVJSON 2>/dev/null)
+    if [ $? -ne 0 ] || [ -z "$primary_count" ]; then
+        echo "Error: Failed to parse $DEVJSON" >&2
+        exit 1
+    fi
+    if [ "$primary_count" -eq 0 ]; then
+        echo "Error: No primary interface found in $DEVJSON" >&2
+        exit 1
+    elif [ "$primary_count" -gt 1 ]; then
+        echo "Error: Multiple primary interfaces found in $DEVJSON" >&2
+        jq -r '.[] | select(.primary == true).name' $DEVJSON >&2
+        exit 1
+    fi
+    LOCAL_INTERFACE_NAME=$(jq -r '.[] | select(.primary == true).name' $DEVJSON)
     go run main.go env verify --interface="$LOCAL_INTERFACE_NAME" --nodeName="$NODE_NAME" --kubeconfig="$LOCAL_KUBECONFIG" --use-analyser-format --clock-type="$TEST_MODE" > $ENVJSONRAW
 
     if [ $? -gt 0 ]
@@ -303,7 +342,7 @@ EOF
 analyse_data() {
     pushd "$ANALYSERPATH" >/dev/null 2>&1
 
-    # Get primary interface name for PTP4L tests
+    # Get primary interface name for PTP4L tests (already validated in verify_env)
     PRIMARY_INTERFACE_NAME=$(jq -r '.[] | select(.primary == true).name' $DEVJSON)
 
     # Only process GNSS data for T-GM mode (BC doesn't use GNSS constellation tests)
@@ -371,7 +410,7 @@ EOF
         fi
     done
 
-    env PYTHONPATH=$TDPATH:$PPPATH python3 -m testdrive.run --basedir="$ANALYSERPATH/tests" --imagedir="$PLOTDIR" "$BASEURL_TEST_IDS" $ARTEFACTDIR/testdrive_config.json
+    env PYTHONPATH=$TDPATH:$PPPATH:$TESTCOMMONPATH python3 -m testdrive.run --basedir="$ANALYSERPATH/tests" --imagedir="$PLOTDIR" "$BASEURL_TEST_IDS" $ARTEFACTDIR/testdrive_config.json
 
     popd >/dev/null 2>&1
 }

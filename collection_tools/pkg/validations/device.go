@@ -14,10 +14,13 @@ const (
 	deviceDetailsDescription = "Verify NIC device model"
 )
 
+// Intel CarterFlat E830 12d3
 var (
 	VendorIntel        = "0x8086"
 	E810WesportChannel = "0x1593"
 	E810LoganBeach     = "0x1592"
+	E825CarterFlat     = "0x579e"
+	E830CarterFlat     = "0x12d3"
 )
 
 type DeviceDetails struct {
@@ -26,8 +29,12 @@ type DeviceDetails struct {
 }
 
 func (dev *DeviceDetails) Verify() error {
-	if dev.VendorID != VendorIntel || (dev.DeviceID != E810WesportChannel && dev.DeviceID != E810LoganBeach) {
-		return utils.NewInvalidEnvError(errors.New("NIC device is not based on E810"))
+	if dev.VendorID != VendorIntel ||
+		(dev.DeviceID != E810WesportChannel &&
+			dev.DeviceID != E810LoganBeach &&
+			dev.DeviceID != E825CarterFlat &&
+			dev.DeviceID != E830CarterFlat) {
+		return utils.NewInvalidEnvError(errors.New("NIC device is not based on E810/E825/E830"))
 	}
 
 	return nil

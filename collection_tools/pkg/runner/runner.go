@@ -199,7 +199,6 @@ func (runner *CollectorRunner) start() {
 	}
 
 	for _, collectorName := range append(collectorsNames, announcersNames...) {
-
 		collector := runner.collectorInstances[collectorName]
 		log.Debugf("start collector %v", collector)
 		err := collector.Start()
