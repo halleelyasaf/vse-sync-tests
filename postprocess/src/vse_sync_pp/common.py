@@ -4,6 +4,7 @@
 
 import sys
 from contextlib import nullcontext
+
 import json
 from decimal import Decimal
 import numpy

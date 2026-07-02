@@ -40,6 +40,7 @@ var (
 	tempDir                string
 	keepDebugFiles         bool
 	unmanagedDebugPod      bool
+	dpllPreferSMA1         bool
 )
 
 // collectCmd represents the collect command
@@ -61,7 +62,6 @@ var collectCmd = &cobra.Command{
 		if requestedDuration.Nanoseconds() < 0 {
 			log.Panicf("Requested duration must be positive")
 		}
-
 		utils.IfErrorExitOrPanic(err)
 
 		for _, c := range collectorNames {
@@ -74,12 +74,10 @@ var collectCmd = &cobra.Command{
 
 		if strings.Contains(tempDir, "~") {
 			var usr *user.User
-
 			usr, err = user.Current()
 			if err != nil {
 				log.Fatal("Failed to fetch current user so could not resolve tempdir")
 			}
-
 			if tempDir == "~" {
 				tempDir = usr.HomeDir
 			} else if strings.HasPrefix(tempDir, "~/") {
@@ -105,6 +103,7 @@ var collectCmd = &cobra.Command{
 			keepDebugFiles,
 			unmanagedDebugPod,
 			clockTypeUpper,
+			dpllPreferSMA1,
 		)
 		utils.IfErrorExitOrPanic(err)
 
@@ -181,4 +180,10 @@ func init() { //nolint:funlen // Allow this to get a little long
 	collectCmd.Flags().BoolVar(&keepDebugFiles, "keep", defaultKeepDebugFiles, "Keep debug files")
 
 	collectCmd.Flags().BoolVar(&unmanagedDebugPod, "unmanaged-debug-pod", false, "Do not manage debug pod")
+	collectCmd.Flags().BoolVar(
+		&dpllPreferSMA1,
+		"dpll-prefer-sma1",
+		false,
+		"Prefer SMA1 DPLL netlink pin (for secondary NIC SMA1-to-DPLL tests)",
+	)
 }

@@ -88,6 +88,7 @@ func NewClusterVersion(client *clients.Clientset) *VersionWithErrorCheck {
 			MinVersion:   MinClusterVersion,
 			description:  clusterVersionDescription,
 			order:        clusterVersionOrdering,
+			strict:       true,
 		},
 		Error: err,
 	}

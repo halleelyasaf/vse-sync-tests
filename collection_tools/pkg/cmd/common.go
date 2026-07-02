@@ -40,7 +40,7 @@ func AddFormatFlag(targetCmd *cobra.Command) {
 		"use-analyser-format",
 		"j",
 		false,
-		"Output in a format to be used by analysers from vse-sync-pp",
+		"Emit analyser JSON output instead of raw output",
 	)
 }
 

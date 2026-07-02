@@ -19,11 +19,8 @@ import (
 )
 
 var _ = Describe("NewContainerContext", func() {
-	var (
-		clientset *clients.Clientset
-		response  map[string][]byte
-	)
-
+	var clientset *clients.Clientset
+	var response map[string][]byte
 	BeforeEach(func() { //nolint:dupl // this is test setup code
 		clientset = testutils.GetMockedClientSet(testPod)
 		response = make(map[string][]byte)
@@ -31,18 +28,13 @@ var _ = Describe("NewContainerContext", func() {
 			reader := bufio.NewReader(options.Stdin)
 			cmd := ""
 			keepReading := true
-
 			var cmdSb30 strings.Builder
-
 			for keepReading {
 				line, prefix, _ := reader.ReadLine()
 				keepReading = prefix
-
-				cmdSb30.Write(line)
+				cmdSb30.WriteString(string(line))
 			}
-
 			cmd += cmdSb30.String()
-
 			return response[cmd], []byte(""), nil
 		}
 		clients.NewSPDYExecutor = testutils.NewFakeNewSPDYExecutor(responder, nil)
@@ -67,7 +59,7 @@ var _ = Describe("NewContainerContext", func() {
 
 			ctx, err := clients.NewContainerContext(clientset, "TestNamespace", "Test", "TestContainer", "TestNodeName")
 			Expect(err).NotTo(HaveOccurred())
-			info, err := devices.GetDevDPLLFilesystemInfo(ctx, "aFakeInterface")
+			info, err := devices.GetDevDPLLFilesystemInfo(ctx, "aFakeInterface", false)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(info.Timestamp).To(Equal("2023-06-16T11:49:47.0584Z"))
 			Expect(info.EECState).To(Equal(eecState))

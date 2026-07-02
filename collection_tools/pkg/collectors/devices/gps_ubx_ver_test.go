@@ -18,11 +18,8 @@ import (
 )
 
 var _ = Describe("GetGPSNav", func() {
-	var (
-		clientset *clients.Clientset
-		response  map[string][]byte
-	)
-
+	var clientset *clients.Clientset
+	var response map[string][]byte
 	BeforeEach(func() { //nolint:dupl // this is test setup code
 		clientset = testutils.GetMockedClientSet(testPod)
 		response = make(map[string][]byte)
@@ -30,18 +27,13 @@ var _ = Describe("GetGPSNav", func() {
 			reader := bufio.NewReader(options.Stdin)
 			cmd := ""
 			keepReading := true
-
 			var cmdSb30 strings.Builder
-
 			for keepReading {
 				line, prefix, _ := reader.ReadLine()
 				keepReading = prefix
-
-				cmdSb30.Write(line)
+				cmdSb30.WriteString(string(line))
 			}
-
 			cmd += cmdSb30.String()
-
 			return response[cmd], []byte(""), nil
 		}
 		clients.NewSPDYExecutor = testutils.NewFakeNewSPDYExecutor(responder, nil)
@@ -94,6 +86,7 @@ var _ = Describe("GetGPSNav", func() {
 			Expect(gpsInfo.UBXVersion).To(Equal("3.25.1~dev"))
 			Expect(gpsInfo.GPSDVersion).To(Equal("3.25.1~dev (revision release-3.25-109-g1a04cfab8)"))
 			Expect(gpsInfo.GNSSDevices).To(Equal([]string{"/dev/gnss0"}))
+
 		})
 	})
 })

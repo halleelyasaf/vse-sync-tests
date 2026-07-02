@@ -24,5 +24,6 @@ func NewGPSDVersion(gpsdVer *devices.GPSVersions) *VersionCheck {
 		MinVersion:   MinGSPDVersion,
 		description:  gpsdDescription,
 		order:        gpsdVersionOrdering,
+		strict:       true,
 	}
 }

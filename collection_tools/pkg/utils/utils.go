@@ -39,21 +39,21 @@ func IfErrorExitOrPanic(err error) {
 type WaitGroupCount struct {
 	sync.WaitGroup
 
-	count atomic.Int64
+	count int64
 }
 
 func (wg *WaitGroupCount) Add(delta int) {
-	wg.count.Add(int64(delta))
+	atomic.AddInt64(&wg.count, int64(delta))
 	wg.WaitGroup.Add(delta)
 }
 
 func (wg *WaitGroupCount) Done() {
-	wg.count.Add(-1)
+	atomic.AddInt64(&wg.count, -1)
 	wg.WaitGroup.Done()
 }
 
 func (wg *WaitGroupCount) GetCount() int {
-	return int(wg.count.Load())
+	return int(atomic.LoadInt64(&wg.count))
 }
 
 // ParseTimestamp converts an input number of seconds (including a decimal fraction) into a time.Time

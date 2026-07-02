@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"strings"
+	"sync"
 
 	log "github.com/sirupsen/logrus"
 
@@ -18,15 +20,97 @@ import (
 )
 
 var states = map[string]string{
-	"unknown":       "-1",
-	"invalid":       "0",
-	"freerun":       "1",
-	"locked":        "2",
-	"locked-ho-acq": "3",
-	"holdover":      "4",
+	"unknown":              "-1",
+	"unlocked":             "0",
+	"invalid":              "0",
+	"freerun":              "1",
+	"locked":               "2",
+	"locked-ho-acq":        "3",
+	"locked_ho_acq":        "3",
+	"DPLL_LOCKED_HO_ACQ":   "3",
+	"DPLL_LOCKED":          "2",
+	"holdover":             "4",
+}
+
+const unknownDPLLState = "-1"
+
+// normalizeDPLLState maps sysfs/netlink state strings to integer codes expected by postprocess.
+func normalizeDPLLState(state string) string {
+	state = strings.TrimSpace(state)
+	if state == "" {
+		return unknownDPLLState
+	}
+
+	if _, err := strconv.Atoi(state); err == nil {
+		return state
+	}
+
+	if mapped, ok := states[state]; ok {
+		return mapped
+	}
+
+	log.Debugf("unknown DPLL state value %q, defaulting to %s", state, unknownDPLLState)
+
+	return unknownDPLLState
+}
+
+func isLockedDPLLState(state string) bool {
+	normalized := normalizeDPLLState(state)
+	return normalized == "2" || normalized == "3"
+}
+
+func dpllDeviceTypeKey(clockType string, deviceID int) string {
+	clockType = strings.ToLower(strings.TrimSpace(clockType))
+
+	switch clockType {
+	case "eec", "synce":
+		return "eec"
+	case "pps", "phase", "phc", "1pps":
+		return "pps"
+	}
+
+	if clockType == "" {
+		switch deviceID {
+		case 0:
+			return "eec"
+		case 1:
+			return "pps"
+		default:
+			return ""
+		}
+	}
+
+	return clockType
+}
+
+func fillPPSDPLLState(dpllInfo *DevNetlinkDPLLInfo, ctx clients.ExecContext, interfaceName string) {
+	if normalizeDPLLState(dpllInfo.PPSState) != unknownDPLLState {
+		return
+	}
+
+	if fsState, err := readSysfsDPLLState(ctx, interfaceName, 1); err == nil && fsState != "" {
+		dpllInfo.PPSState = fsState
+		if normalizeDPLLState(dpllInfo.PPSState) != unknownDPLLState {
+			return
+		}
+	}
+
+	if isLockedDPLLState(dpllInfo.EECState) {
+		log.Debugf(
+			"PPS DPLL state unavailable via netlink/sysfs for %s; using EEC state %s",
+			interfaceName,
+			normalizeDPLLState(dpllInfo.EECState),
+		)
+		dpllInfo.PPSState = dpllInfo.EECState
+	}
 }
 
 const (
+	dpllYNLCLIPath     = "/linux/tools/net/ynl/cli.py"
+	dpllYNLSpecPath    = "/linux/Documentation/netlink/specs/dpll.yaml"
+	maxDPLLPinProbe    = 32
+	maxDPLLDeviceProbe = 8
+
 	OnePPSLabel = "GNSS-1PPS"
 	SMA1Label   = "SMA1"
 	SMA2Label   = "SMA2"
@@ -44,12 +128,13 @@ const (
 )
 
 type DevNetlinkDPLLInfo struct {
-	PinType   string
-	Timestamp string `fetcherKey:"date"       json:"timestamp"`
-	EECState  string `fetcherKey:"eec"        json:"eecstate"`
-	PPSState  string `fetcherKey:"pps"        json:"state"`
-	PPSOffset int64  `fetcherKey:"pps_offset" json:"terror"`
-	EECOffset int64  `fetcherKey:"eec_offset" json:"eecterror"`
+	PinType    string
+	PreferSMA1 bool
+	Timestamp  string `fetcherKey:"date"       json:"timestamp"`
+	EECState   string `fetcherKey:"eec"        json:"eecstate"`
+	PPSState   string `fetcherKey:"pps"        json:"state"`
+	PPSOffset  int64  `fetcherKey:"pps_offset" json:"terror"`
+	EECOffset  int64  `fetcherKey:"eec_offset" json:"eecterror"`
 }
 
 func convertNetlinkOffset(offset int64) float64 {
@@ -60,26 +145,21 @@ func convertNetlinkOffset(offset int64) float64 {
 // AnalyserJSON returns the json expected by the analysers
 func (dpllInfo *DevNetlinkDPLLInfo) GetAnalyserFormat() ([]*callbacks.AnalyserFormatType, error) {
 	subType := UnknownSubtype
+	pinLabel := dpllInfo.PinType
 
-	switch dpllInfo.PinType {
+	switch pinLabel {
 	case OnePPSLabel:
 		subType = OnePPSSubtype
 	case SMA1Label:
 		subType = SMA1Subtype
-	default:
-		// For other pins (timing cards, fallback pins), use a generic "dpll" subtype
-		// instead of "unknown" to indicate valid DPLL data from a non-standard source
-		if dpllInfo.PinType != "" {
-			subType = OnePPSSubtype // Use "dpll" prefix for compatibility
-		}
 	}
 
 	formatted := callbacks.AnalyserFormatType{
 		ID: subType + "/time-error",
 		Data: map[string]any{
 			"timestamp": dpllInfo.Timestamp,
-			"eecstate":  dpllInfo.EECState,
-			"state":     dpllInfo.PPSState,
+			"eecstate":  normalizeDPLLState(dpllInfo.EECState),
+			"state":     normalizeDPLLState(dpllInfo.PPSState),
 			"terror":    convertNetlinkOffset(dpllInfo.PPSOffset),
 			"eecterror": convertNetlinkOffset(dpllInfo.EECOffset),
 		},
@@ -183,114 +263,277 @@ type NetlinkFrequencySupportedRange struct {
 // },
 
 var (
-	dpllNetlinkFetcher map[uint64]*fetcher.Fetcher
 	dpllClockIDFetcher map[string]*fetcher.Fetcher
+	deviceDumpWarnOnce sync.Once
+	pinDumpWarnOnce    sync.Once
 )
 
 func init() {
-	dpllNetlinkFetcher = make(map[uint64]*fetcher.Fetcher)
 	dpllClockIDFetcher = make(map[string]*fetcher.Fetcher)
 }
 
-func buildPostProcessDPLLNetlink(clockID uint64) fetcher.PostProcessFuncType {
-	return func(result map[string]string) (map[string]any, error) {
-		processedResult := make(map[string]any)
+func runDPLLYNLCommand(ctx clients.ExecContext, args string) (string, error) {
+	command := fmt.Sprintf("%s --spec %s %s", dpllYNLCLIPath, dpllYNLSpecPath, args)
 
-		entries := make([]NetlinkStateEntry, 0)
-
-		err := json.Unmarshal([]byte(result["dpll-netlink-device"]), &entries)
-		if err != nil {
-			log.Errorf("Failed to unmarshal netlink device output: %s", err.Error())
-		}
-
-		log.Debug("entries: ", entries)
-
-		for _, entry := range entries {
-			if entry.ClockID == clockID {
-				state, ok := states[entry.LockStatus]
-				if !ok {
-					log.Errorf("Unknown state: %s", state)
-					state = "-1"
-				}
-
-				processedResult[entry.ClockType] = state
-			}
-		}
-
-		pin := NetlinkPin{}
-
-		err = json.Unmarshal([]byte(result["dpll-netlink-offset"]), &pin)
-		if err != nil {
-			log.Errorf("Failed to unmarshal netlink pin output: %s", err.Error())
-		}
-
-		for _, parentPin := range pin.ParentDevices {
-			switch parentPin.ParentID % 2 {
-			case EECOffsetParentID:
-				processedResult["ecc_offset"] = parentPin.PhaseOffset
-			case PPSOffesetParentID:
-				processedResult["pps_offset"] = parentPin.PhaseOffset
-			}
-		}
-
-		return processedResult, nil
+	stdout, stderr, err := ctx.ExecCommand([]string{"/usr/bin/sh", "-c", command})
+	if stderr != "" {
+		log.Debugf("DPLL ynl stderr: %s", stderr)
 	}
+
+	if err != nil {
+		return "", fmt.Errorf("dpll ynl command failed: %w", err)
+	}
+
+	return strings.TrimSpace(stdout), nil
 }
 
-// BuildDPLLNetlinkDeviceFetcher popluates the fetcher required for
-// collecting the DPLLInfo
-func BuildDPLLNetlinkDeviceFetcher(params NetlinkParameters) error { //nolint:dupl // Further dedup risks be too abstract or fragile
-	fetcherInst, err := fetcher.FetcherFactory(
-		[]*clients.Cmd{dateCmd},
-		[]fetcher.AddCommandArgs{
-			{
-				Key: "dpll-netlink-device",
-				Command: "/linux/tools/net/ynl/cli.py --spec /linux/Documentation/netlink/specs/dpll.yaml --dump device-get | " +
-					"python3 /root/custom_scripts/json_encoder.py",
-				Trim: true,
-			},
-			{
-				Key: "dpll-netlink-offset",
-				Command: fmt.Sprintf(
-					"/linux/tools/net/ynl/cli.py --spec /linux/Documentation/netlink/specs/dpll.yaml --do pin-get --json %s | "+
-						"python3 /root/custom_scripts/json_encoder.py",
-					fmt.Sprintf("'{\"id\": %d}'", params.OffsetPin),
-				),
-				Trim: true,
-			},
-		},
-	)
+func runTimestamp(ctx clients.ExecContext) (string, error) {
+	stdout, _, err := ctx.ExecCommand([]string{"date", "+%s.%N"})
 	if err != nil {
-		log.Errorf("failed to create fetcher for dpll netlink: %s", err.Error())
-		return fmt.Errorf("failed to create fetcher for dpll netlink: %w", err)
+		return "", fmt.Errorf("failed to read timestamp: %w", err)
 	}
 
-	dpllNetlinkFetcher[params.ClockID] = fetcherInst
-	fetcherInst.SetPostProcessor(buildPostProcessDPLLNetlink(params.ClockID))
+	return formatTimestampAsRFC3339Nano(stdout)
+}
+
+func discoverDevicesJSON(ctx clients.ExecContext) ([]byte, error) {
+	out, err := runDPLLYNLCommand(ctx, "--dump device-get --output-json")
+	if err == nil && out != "" {
+		entries := make([]NetlinkStateEntry, 0)
+
+		unmarshalErr := json.Unmarshal([]byte(out), &entries)
+		if unmarshalErr == nil && len(entries) > 0 {
+			return []byte(out), nil
+		}
+
+		log.Debugf("DPLL device-get dump returned unusable data: %v", unmarshalErr)
+	}
+
+	deviceDumpWarnOnce.Do(func() {
+		log.Debug("DPLL device-get dump unavailable on this kernel, probing devices individually (once at setup)")
+	})
+
+	return probeDevicesIndividually(ctx)
+}
+
+func probeDevicesIndividually(ctx clients.ExecContext) ([]byte, error) {
+	entries := make([]NetlinkStateEntry, 0)
+
+	for id := 0; id < maxDPLLDeviceProbe; id++ {
+		out, err := runDPLLYNLCommand(ctx, fmt.Sprintf("--do device-get --json '{\"id\": %d}' --output-json", id))
+		if err != nil || out == "" {
+			continue
+		}
+
+		var entry NetlinkStateEntry
+
+		unmarshalErr := json.Unmarshal([]byte(out), &entry)
+		if unmarshalErr != nil {
+			log.Debugf("skipping DPLL device %d: %v", id, unmarshalErr)
+			continue
+		}
+
+		entries = append(entries, entry)
+	}
+
+	if len(entries) == 0 {
+		return nil, errors.New("no DPLL devices found via individual device-get")
+	}
+
+	return json.Marshal(entries)
+}
+
+func discoverPinsJSON(ctx clients.ExecContext) ([]byte, error) {
+	out, err := runDPLLYNLCommand(ctx, "--dump pin-get --output-json")
+	if err == nil && out != "" {
+		entries := make([]*NetlinkPin, 0)
+
+		unmarshalErr := json.Unmarshal([]byte(out), &entries)
+		if unmarshalErr == nil && len(entries) > 0 {
+			return []byte(out), nil
+		}
+
+		log.Debugf("DPLL pin-get dump returned unusable data: %v", unmarshalErr)
+	}
+
+	pinDumpWarnOnce.Do(func() {
+		log.Debug("DPLL pin-get dump unavailable on this kernel, probing pins individually (once at setup)")
+	})
+
+	return probePinsIndividually(ctx)
+}
+
+func probePinsIndividually(ctx clients.ExecContext) ([]byte, error) {
+	pins := make([]*NetlinkPin, 0)
+
+	for id := int32(0); id < maxDPLLPinProbe; id++ {
+		out, err := runDPLLYNLCommand(ctx, fmt.Sprintf("--do pin-get --json '{\"id\": %d}' --output-json", id))
+		if err != nil || out == "" {
+			continue
+		}
+
+		var pin NetlinkPin
+
+		unmarshalErr := json.Unmarshal([]byte(out), &pin)
+		if unmarshalErr != nil {
+			log.Debugf("skipping DPLL pin %d: %v", id, unmarshalErr)
+			continue
+		}
+
+		pins = append(pins, &pin)
+	}
+
+	if len(pins) == 0 {
+		return nil, utils.NewRequirementsNotMetError(errors.New("no pins found via individual pin-get"))
+	}
+
+	return json.Marshal(pins)
+}
+
+func resolveDeviceIDsForClock(ctx clients.ExecContext, clockID uint64) ([]int, error) {
+	devicesJSON, err := discoverDevicesJSON(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	entries := make([]NetlinkStateEntry, 0)
+
+	err = json.Unmarshal(devicesJSON, &entries)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal netlink device list: %w", err)
+	}
+
+	deviceIDs := make([]int, 0, len(entries))
+
+	for _, entry := range entries {
+		if entry.ClockID == clockID {
+			deviceIDs = append(deviceIDs, entry.ID)
+		}
+	}
+
+	if len(deviceIDs) == 0 {
+		log.Warnf("No DPLL devices matched clock ID %d, defaulting to device ids 0 and 1", clockID)
+		return []int{0, 1}, nil
+	}
+
+	return deviceIDs, nil
+}
+
+func collectDPLLNetlinkSample(ctx clients.ExecContext, params NetlinkParameters) (map[string]any, error) {
+	processedResult := make(map[string]any)
+
+	deviceIDs := params.DeviceIDs
+	if len(deviceIDs) == 0 {
+		deviceIDs = []int{0, 1}
+	}
+
+	for _, deviceID := range deviceIDs {
+		out, err := runDPLLYNLCommand(ctx, fmt.Sprintf("--do device-get --json '{\"id\": %d}' --output-json", deviceID))
+		if err != nil || out == "" {
+			log.Debugf("skipping DPLL device poll for id %d: %v", deviceID, err)
+			continue
+		}
+
+		var entry NetlinkStateEntry
+
+		err = json.Unmarshal([]byte(out), &entry)
+		if err != nil {
+			log.Debugf("failed to parse DPLL device %d: %v", deviceID, err)
+			continue
+		}
+
+		state := normalizeDPLLState(entry.LockStatus)
+
+		clockType := dpllDeviceTypeKey(entry.ClockType, deviceID)
+		if clockType == "" {
+			log.Debugf("skipping DPLL device %d with unmapped type %q", deviceID, entry.ClockType)
+			continue
+		}
+
+		processedResult[clockType] = state
+	}
+
+	pinOut, err := runDPLLYNLCommand(ctx, fmt.Sprintf("--do pin-get --json '{\"id\": %d}' --output-json", params.OffsetPin))
+	if err != nil {
+		return processedResult, fmt.Errorf("failed to read offset pin: %w", err)
+	}
+
+	pin := NetlinkPin{}
+
+	err = json.Unmarshal([]byte(pinOut), &pin)
+	if err != nil {
+		return processedResult, fmt.Errorf("failed to unmarshal netlink pin output: %w", err)
+	}
+
+	for _, parentPin := range pin.ParentDevices {
+		switch parentPin.ParentID {
+		case EECOffsetParentID:
+			processedResult["ecc_offset"] = parentPin.PhaseOffset
+		case PPSOffesetParentID:
+			processedResult["pps_offset"] = parentPin.PhaseOffset
+		}
+	}
+
+	return processedResult, nil
+}
+
+// ValidateNetlinkDPLLSupported checks that required ynl operations work on this node.
+func ValidateNetlinkDPLLSupported(ctx clients.ExecContext, params NetlinkParameters) error {
+	if len(params.DeviceIDs) == 0 {
+		return errors.New("no DPLL device IDs resolved for this interface")
+	}
+
+	_, err := runDPLLYNLCommand(
+		ctx,
+		fmt.Sprintf("--do device-get --json '{\"id\": %d}' --output-json", params.DeviceIDs[0]),
+	)
+	if err != nil {
+		return fmt.Errorf("device %d unavailable: %w", params.DeviceIDs[0], err)
+	}
+
+	_, err = runDPLLYNLCommand(ctx, fmt.Sprintf("--do pin-get --json '{\"id\": %d}' --output-json", params.OffsetPin))
+	if err != nil {
+		return fmt.Errorf("offset pin %d unavailable: %w", params.OffsetPin, err)
+	}
 
 	return nil
 }
 
-// GetDevDPLLInfo returns the device DPLL info for an interface.
+// GetDevDPLLNetlinkInfo returns the device DPLL info for an interface.
 func GetDevDPLLNetlinkInfo(ctx clients.ExecContext, params NetlinkParameters) (*DevNetlinkDPLLInfo, error) {
-	dpllInfo := &DevNetlinkDPLLInfo{PinType: params.PinType}
-
-	fetcherInst, fetchedInstanceOk := dpllNetlinkFetcher[params.ClockID]
-	if !fetchedInstanceOk {
-		err := BuildDPLLNetlinkDeviceFetcher(params)
-		if err != nil {
-			return dpllInfo, err
-		}
-
-		fetcherInst, fetchedInstanceOk = dpllNetlinkFetcher[params.ClockID]
-		if !fetchedInstanceOk {
-			return dpllInfo, errors.New("failed to create fetcher for DPLLInfo using netlink interface")
-		}
+	dpllInfo := &DevNetlinkDPLLInfo{
+		PinType:    params.PinType,
+		PreferSMA1: params.PreferSMA1,
 	}
 
-	err := fetcherInst.Fetch(ctx, dpllInfo)
+	timestamp, err := runTimestamp(ctx)
+	if err != nil {
+		return dpllInfo, err
+	}
+
+	dpllInfo.Timestamp = timestamp
+
+	processed, err := collectDPLLNetlinkSample(ctx, params)
 	if err != nil {
 		return dpllInfo, fmt.Errorf("failed to fetch dpllInfo via netlink: %w", err)
+	}
+
+	if eecState, ok := processed["eec"].(string); ok {
+		dpllInfo.EECState = eecState
+	}
+
+	if ppsState, ok := processed["pps"].(string); ok {
+		dpllInfo.PPSState = ppsState
+	}
+
+	fillPPSDPLLState(dpllInfo, ctx, params.InterfaceName)
+
+	if ppsOffset, ok := processed["pps_offset"].(int64); ok {
+		dpllInfo.PPSOffset = ppsOffset
+	}
+
+	if eecOffset, ok := processed["ecc_offset"].(int64); ok {
+		dpllInfo.EECOffset = eecOffset
 	}
 
 	return dpllInfo, nil
@@ -309,18 +552,6 @@ func BuildNetlinkInfoFetcher(interfaceName string) error {
 				),
 				Trim: true,
 			},
-			{
-				Key: "dpll-netlink-pins",
-				Command: "/linux/tools/net/ynl/cli.py --spec /linux/Documentation/netlink/specs/dpll.yaml --dump pin-get | " +
-					"python3 /root/custom_scripts/json_encoder.py",
-				Trim: true,
-			},
-			{
-				Key: "dpll-netlink-devices",
-				Command: "/linux/tools/net/ynl/cli.py --spec /linux/Documentation/netlink/specs/dpll.yaml --dump device-get | " +
-					"python3 /root/custom_scripts/json_encoder.py",
-				Trim: true,
-			},
 		},
 	)
 	if err != nil {
@@ -334,110 +565,175 @@ func BuildNetlinkInfoFetcher(interfaceName string) error {
 	return nil
 }
 
-func selectPin(pinsJSON []byte, clockID uint64) (int32, string, error) { //nolint:funlen,gocritic,cyclop // allow slightly longer function for sake of readability
-	entries := make([]*NetlinkPin, 0)
+func getPTPIndexForInterface(ctx clients.ExecContext, interfaceName string) (string, error) {
+	out, _, err := ctx.ExecCommand([]string{"ls", fmt.Sprintf("/sys/class/net/%s/device/ptp/", interfaceName)})
+	if err == nil {
+		for f := range strings.FieldsSeq(out) {
+			if strings.HasPrefix(f, "ptp") {
+				return strings.TrimPrefix(f, "ptp"), nil
+			}
+		}
+	}
 
-	err := json.Unmarshal(pinsJSON, &entries)
+	ethout, _, err := ctx.ExecCommand([]string{"ethtool", "-T", interfaceName})
 	if err != nil {
-		return 0, "", fmt.Errorf("failed to unmarshal netlink output: %s", err.Error())
+		return "", fmt.Errorf("failed to resolve PTP index for %s: %w", interfaceName, err)
 	}
 
-	if len(entries) == 0 {
-		return 0, "", utils.NewRequirementsNotMetError(errors.New("no pins found"))
+	for line := range strings.SplitSeq(ethout, "\n") {
+		line = strings.TrimSpace(line)
+
+		if strings.Contains(line, "PTP Hardware Clock:") || strings.Contains(line, "Hardware timestamp provider index:") {
+			index := strings.TrimSpace(strings.SplitN(line, ":", 2)[1])
+			if index != "" && index != "none" {
+				return index, nil
+			}
+		}
 	}
 
-	var OnePPSPin, SMA1Pin *NetlinkPin
+	return "", fmt.Errorf("no PTP index found for %s", interfaceName)
+}
 
-	log.Debugf("selectPin: looking for clockID %d among %d pins", clockID, len(entries))
+// logPTPSysfsPins logs PHC programmable pins (e.g. SDP20) for operator diagnostics.
+// Format per pin: "<name> <function> <channel>" where function 0=none, 1=extts, 2=perout, 3=physync.
+func logPTPSysfsPins(ctx clients.ExecContext, interfaceName string) {
+	ptpIndex, err := getPTPIndexForInterface(ctx, interfaceName)
+	if err != nil {
+		log.Debugf("PTP sysfs pins unavailable for %s: %v", interfaceName, err)
+		return
+	}
 
-	matchingPinCount := 0
+	command := fmt.Sprintf(
+		`for p in /sys/class/ptp/ptp%s/pins/*; do [ -f "$p" ] && echo "$(basename "$p") $(cat "$p")"; done`,
+		ptpIndex,
+	)
+
+	out, _, err := ctx.ExecCommand([]string{"/usr/bin/sh", "-c", command})
+	if err != nil || strings.TrimSpace(out) == "" {
+		log.Debugf("no PTP sysfs pin data under /sys/class/ptp/ptp%s/pins for %s", ptpIndex, interfaceName)
+		return
+	}
+
+	log.Infof(
+		"PHC programmable pins for %s (/sys/class/ptp/ptp%s/pins, not DPLL netlink pins): %s",
+		interfaceName, ptpIndex, strings.ReplaceAll(strings.TrimSpace(out), "\n", "; "),
+	)
+}
+
+func readSysfsDPLLState(ctx clients.ExecContext, interfaceName string, index int) (string, error) {
+	path := fmt.Sprintf("/sys/class/net/%s/device/dpll_%d_state", interfaceName, index)
+
+	stdout, _, err := ctx.ExecCommand([]string{"/usr/bin/cat", path})
+	if err != nil {
+		return "", err
+	}
+
+	return strings.TrimSpace(stdout), nil
+}
+
+func pickLabeledPin(entries []*NetlinkPin, clockID uint64, matchClock bool, preferSMA1 bool) (int32, string, uint64, bool) {
+	var onePPSPin, sma1Pin *NetlinkPin
+
 	for _, pin := range entries {
-		if pin.ClockID != clockID {
-			log.Debugf("selectPin: skipping pin ID=%d label=%s (clockID %d != %d)", pin.ID, pin.Label, pin.ClockID, clockID)
+		if matchClock && pin.ClockID != clockID {
 			continue
 		}
-		matchingPinCount++
-		log.Debugf("selectPin: found matching pin ID=%d label=%s type=%s", pin.ID, pin.Label, pin.Type)
 
 		switch pin.Label {
 		case OnePPSLabel:
-			OnePPSPin = pin
+			onePPSPin = pin
 		case SMA1Label:
-			SMA1Pin = pin
+			sma1Pin = pin
 		}
 	}
 
-	log.Debugf("selectPin: found %d pins matching clockID %d", matchingPinCount, clockID)
+	choosePPS := onePPSPin != nil
+	chooseSMA1 := sma1Pin != nil
 
-	choosePPS := false
-	if OnePPSPin != nil {
-		choosePPS = true
-		log.Debugf("selectPin: evaluating 1PPS pin ID=%d with %d parent devices", OnePPSPin.ID, len(OnePPSPin.ParentDevices))
-		for _, parentDev := range OnePPSPin.ParentDevices {
-			log.Debugf("selectPin: 1PPS parent device: direction=%s state=%s", parentDev.Direction, parentDev.State)
+	if choosePPS {
+		for _, parentDev := range onePPSPin.ParentDevices {
 			if parentDev.State != ConnectedState {
-				log.Debugf("selectPin: 1PPS rejected - parent device not connected (state=%s)", parentDev.State)
 				choosePPS = false
 				break
 			}
 		}
-		if choosePPS {
-			log.Debugf("selectPin: 1PPS pin selected")
-		}
-	} else {
-		log.Debugf("selectPin: no 1PPS pin found")
 	}
 
-	chooseSMA1 := false
-	if SMA1Pin != nil {
-		chooseSMA1 = true
-		log.Debugf("selectPin: evaluating SMA1 pin ID=%d with %d parent devices", SMA1Pin.ID, len(SMA1Pin.ParentDevices))
-		for _, parentDev := range SMA1Pin.ParentDevices {
-			log.Debugf("selectPin: SMA1 parent device: direction=%s state=%s", parentDev.Direction, parentDev.State)
+	if chooseSMA1 {
+		for _, parentDev := range sma1Pin.ParentDevices {
 			if parentDev.Direction != InputDirection || parentDev.State != ConnectedState {
-				log.Debugf("selectPin: SMA1 rejected - parent device invalid (direction=%s, state=%s)", parentDev.Direction, parentDev.State)
 				chooseSMA1 = false
 				break
 			}
 		}
-		if chooseSMA1 {
-			log.Debugf("selectPin: SMA1 pin selected")
-		}
-	} else {
-		log.Debugf("selectPin: no SMA1 pin found")
 	}
 
-	//nolint:gocritic // this is clearer
+	if preferSMA1 && chooseSMA1 {
+		return sma1Pin.ID, SMA1Label, sma1Pin.ClockID, true
+	}
+
 	if choosePPS {
-		return OnePPSPin.ID, OnePPSLabel, nil
+		return onePPSPin.ID, OnePPSLabel, onePPSPin.ClockID, true
 	}
 
 	if chooseSMA1 {
-		return SMA1Pin.ID, SMA1Label, nil
+		return sma1Pin.ID, SMA1Label, sma1Pin.ClockID, true
 	}
 
-	// Fallback: find any pin with at least one connected input parent device
-	log.Debugf("selectPin: no 1PPS or SMA1 pin available, looking for any connected input pin")
-	for _, pin := range entries {
-		if pin.ClockID != clockID {
-			continue
-		}
+	if onePPSPin != nil {
+		return onePPSPin.ID, OnePPSLabel, onePPSPin.ClockID, true
+	}
 
-		hasConnectedInput := false
-		for _, parentDev := range pin.ParentDevices {
-			if parentDev.Direction == InputDirection && parentDev.State == ConnectedState {
-				hasConnectedInput = true
-				break
+	if sma1Pin != nil {
+		return sma1Pin.ID, SMA1Label, sma1Pin.ClockID, true
+	}
+
+	if matchClock {
+		for _, pin := range entries {
+			if pin.ClockID != clockID {
+				continue
 			}
-		}
 
-		if hasConnectedInput {
-			log.Infof("selectPin: using fallback pin ID=%d label=%s type=%s (no 1PPS/SMA1 available)", pin.ID, pin.Label, pin.Type)
-			return pin.ID, pin.Label, nil
+			label := pin.Label
+			if label == "" {
+				label = UnknownSubtype
+			}
+
+			return pin.ID, label, pin.ClockID, true
 		}
 	}
 
-	return 0, "", utils.NewRequirementsNotMetError(errors.New("failed to determine correct offset pin: no suitable 1PPS or SMA1 pin found"))
+	return 0, "", 0, false
+}
+
+func selectPin(pinsJSON []byte, clockID uint64, preferSMA1 bool) (int32, string, uint64, error) {
+	entries := make([]*NetlinkPin, 0)
+
+	err := json.Unmarshal(pinsJSON, &entries)
+	if err != nil {
+		return 0, "", 0, fmt.Errorf("failed to unmarshal netlink output: %s", err.Error())
+	}
+
+	if len(entries) == 0 {
+		return 0, "", 0, utils.NewRequirementsNotMetError(errors.New("no pins found"))
+	}
+
+	log.Debug("entries: ", entries)
+
+	if pinID, label, pinClockID, ok := pickLabeledPin(entries, clockID, true, preferSMA1); ok {
+		return pinID, label, pinClockID, nil
+	}
+
+	if pinID, label, pinClockID, ok := pickLabeledPin(entries, clockID, false, preferSMA1); ok {
+		log.Infof(
+			"DPLL netlink: no pin for serial-derived clock ID %d on this port; using pin %d (%s, clock ID %d)",
+			clockID, pinID, label, pinClockID,
+		)
+
+		return pinID, label, pinClockID, nil
+	}
+
+	return 0, "", 0, utils.NewRequirementsNotMetError(errors.New("failed to determine correct offset pin"))
 }
 
 func postProcessDPLLNetlinkClockID(result map[string]string) (map[string]any, error) {
@@ -450,50 +746,24 @@ func postProcessDPLLNetlinkClockID(result map[string]string) (map[string]any, er
 
 	processedResult["clockID"] = clockID
 
-	// Try to select a pin using the NIC's clock ID first
-	offsetPintID, pinType, err := selectPin([]byte(result["dpll-netlink-pins"]), clockID)
-
-	// If no pins match the NIC's clock ID, try using the clock ID from DPLL devices
-	// This handles cases where DPLL is on a separate timing card (e.g., zl3073x)
-	if err != nil {
-		var reqNotMet *utils.RequirementsNotMetError
-		if errors.As(err, &reqNotMet) {
-			log.Debugf("No pins found for NIC clockID %d, trying DPLL device clock IDs", clockID)
-
-			devices := make([]NetlinkStateEntry, 0)
-			if devErr := json.Unmarshal([]byte(result["dpll-netlink-devices"]), &devices); devErr == nil && len(devices) > 0 {
-				// Use the first DPLL device's clock ID as fallback
-				fallbackClockID := devices[0].ClockID
-				log.Infof("Using DPLL device clock ID %d (module: %s) instead of NIC clock ID %d",
-					fallbackClockID, devices[0].Driver, clockID)
-
-				offsetPintID, pinType, err = selectPin([]byte(result["dpll-netlink-pins"]), fallbackClockID)
-				if err == nil {
-					processedResult["clockID"] = fallbackClockID
-				}
-			}
-		}
-	}
-
-	if err != nil {
-		return processedResult, err
-	}
-
-	processedResult["offsetPin"] = offsetPintID
-	processedResult["pinType"] = pinType
-
 	return processedResult, nil
 }
 
 type NetlinkParameters struct {
-	Timestamp string `fetcherKey:"date"      json:"timestamp"`
-	PinType   string `fetcherKey:"pinType"   json:"pinType"`
-	ClockID   uint64 `fetcherKey:"clockID"   json:"clockId"`
-	OffsetPin int32  `fetcherKey:"offsetPin" json:"offsetPin"`
+	Timestamp     string `fetcherKey:"date"      json:"timestamp"`
+	PinType       string `fetcherKey:"pinType"   json:"pinType"`
+	ClockID       uint64 `fetcherKey:"clockID"   json:"clockId"`
+	OffsetPin     int32  `fetcherKey:"offsetPin" json:"offsetPin"`
+	DeviceIDs     []int  `json:"deviceIds"`
+	InterfaceName string `json:"interfaceName"`
+	PreferSMA1    bool   `json:"preferSma1"`
 }
 
-func GetNetlinkParameters(ctx clients.ExecContext, interfaceName string) (NetlinkParameters, error) {
-	netlinkInfo := NetlinkParameters{}
+func GetNetlinkParameters(ctx clients.ExecContext, interfaceName string, preferSMA1 bool) (NetlinkParameters, error) {
+	netlinkInfo := NetlinkParameters{
+		InterfaceName: interfaceName,
+		PreferSMA1:    preferSMA1,
+	}
 
 	fetcherInst, fetchedInstanceOk := dpllClockIDFetcher[interfaceName]
 	if !fetchedInstanceOk {
@@ -512,6 +782,38 @@ func GetNetlinkParameters(ctx clients.ExecContext, interfaceName string) (Netlin
 	if err != nil {
 		return netlinkInfo, fmt.Errorf("failed to fetch netlink info %w", err)
 	}
+
+	pinsJSON, err := discoverPinsJSON(ctx)
+	if err != nil {
+		return netlinkInfo, fmt.Errorf("failed to discover dpll pins: %w", err)
+	}
+
+	serialClockID := netlinkInfo.ClockID
+
+	offsetPinID, pinType, pinClockID, err := selectPin(pinsJSON, serialClockID, preferSMA1)
+	if err != nil {
+		logPTPSysfsPins(ctx, interfaceName)
+		return netlinkInfo, err
+	}
+
+	netlinkInfo.OffsetPin = offsetPinID
+	netlinkInfo.PinType = pinType
+
+	if pinClockID != 0 && pinClockID != serialClockID {
+		log.Debugf(
+			"DPLL device scope: clock ID %d from pin %d (%s) replaces serial-derived %d for %s",
+			pinClockID, offsetPinID, pinType, serialClockID, interfaceName,
+		)
+		logPTPSysfsPins(ctx, interfaceName)
+		netlinkInfo.ClockID = pinClockID
+	}
+
+	deviceIDs, err := resolveDeviceIDsForClock(ctx, netlinkInfo.ClockID)
+	if err != nil {
+		return netlinkInfo, fmt.Errorf("failed to resolve dpll device ids: %w", err)
+	}
+
+	netlinkInfo.DeviceIDs = deviceIDs
 
 	return netlinkInfo, nil
 }

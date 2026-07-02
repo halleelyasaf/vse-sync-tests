@@ -22,15 +22,15 @@ var (
 	outOfTreeIceDriverSegments = 3
 )
 
-func NewDeviceDriver(ptpDevInfo *devices.PTPDeviceInfo) *VersionWithErrorCheck {
+func NewDeviceDriver(ptpDevInfo *devices.PTPDeviceInfo, strict bool) *VersionWithErrorCheck {
 	var err error
 
 	checkVer := ptpDevInfo.DriverVersion
-	if checkVer[len(checkVer)-1] == '.' {
+	if len(checkVer) > 0 && checkVer[len(checkVer)-1] == '.' {
 		checkVer = checkVer[:len(checkVer)-1]
 	}
 
-	ver := "v" + strings.ReplaceAll(checkVer, "_", "-")
+	ver := normalizeSemverVersion(checkVer)
 	if semver.IsValid(ver) {
 		if semver.Compare(ver, "v"+minInTreeDriverVersion) < 0 {
 			err = fmt.Errorf(
@@ -55,6 +55,7 @@ func NewDeviceDriver(ptpDevInfo *devices.PTPDeviceInfo) *VersionWithErrorCheck {
 			MinVersion:   minDriverVersion,
 			description:  deviceDriverVersionDescription,
 			order:        deviceDriverVersionOrdering,
+			strict:       strict,
 		},
 		Error: err,
 	}

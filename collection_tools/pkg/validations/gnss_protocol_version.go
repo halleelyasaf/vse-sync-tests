@@ -20,5 +20,6 @@ func NewGNSSProtocol(gnss *devices.GPSVersions) *VersionCheck {
 		MinVersion:   MinProtoVersion,
 		description:  gnssProtIDescription,
 		order:        gnssProtOrdering,
+		strict:       true,
 	}
 }

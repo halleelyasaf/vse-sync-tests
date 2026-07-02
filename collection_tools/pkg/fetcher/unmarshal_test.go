@@ -39,6 +39,7 @@ var _ = Describe("setValueOnField", func() {
 			err = setValueOnField(sliceFieldVal, testSliceValue)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(target.TestSlice).To(Equal(testSliceValue))
+
 		})
 	})
 	When("calling setValueOnField with a non trivial type", func() {
@@ -50,6 +51,7 @@ var _ = Describe("setValueOnField", func() {
 			err := setValueOnField(sliceFieldVal, testDuration)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(target.TestDuration).To(Equal(testDuration))
+
 		})
 	})
 	When("calling setValueOnField with a struct type", func() {

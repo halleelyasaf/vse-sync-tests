@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -31,14 +32,22 @@ func getDevInfoValidations(
 	ptpNodeName string,
 	clockType string,
 ) []validations.Validation {
+	if strings.TrimSpace(interfaceName) == "" {
+		utils.IfErrorExitOrPanic(fmt.Errorf("interface name is required for device environment checks"))
+	}
+
 	ctx, err := contexts.GetPTPDaemonContext(clientset, ptpNodeName)
 	utils.IfErrorExitOrPanic(err)
-	devInfo, err := devices.GetPTPDeviceInfo(interfaceName, ctx, clockType)
-	utils.IfErrorExitOrPanic(err)
 
-	devDetails := validations.NewDeviceDetails(devInfo)
-	devFirmware := validations.NewDeviceFirmware(devInfo)
-	devDriver := validations.NewDeviceDriver(devInfo)
+	devInfo, err := devices.GetPTPDeviceInfo(interfaceName, ctx, clockType)
+	if err != nil {
+		utils.IfErrorExitOrPanic(fmt.Errorf("failed to gather NIC info for %s: %w", interfaceName, err))
+	}
+
+	strictNIC := clockType != constants.ClockTypeBC
+	devDetails := validations.NewDeviceDetails(devInfo, strictNIC)
+	devFirmware := validations.NewDeviceFirmware(devInfo, strictNIC)
+	devDriver := validations.NewDeviceDriver(devInfo, strictNIC)
 
 	return []validations.Validation{devDetails, devFirmware, devDriver}
 }
@@ -70,29 +79,42 @@ func getGPSStatusValidation(
 
 	// If we need to do this for more validations then consider a generic
 	var (
-		antCheck   *validations.GNSSAntStatus
+		antCheck   validations.Validation
+		navCheck   validations.Validation
 		gpsDetails *devices.GPSDetails
 	)
 
+	var lastErr error
+
 	for range antPowerRetries {
-		gpsDetails, err = devices.GetGPSNav(ctx)
-		if err != nil {
+		details, fetchErr := devices.GetGPSNav(ctx)
+		if fetchErr != nil {
+			lastErr = fetchErr
+			log.Warnf("GPS status fetch attempt failed: %v", fetchErr)
 			continue
 		}
 
-		if antCheck = validations.NewGNSSAntStatus(gpsDetails); antCheck.Verify() == nil {
+		gpsDetails = details
+		lastErr = nil
+		antCheck = validations.NewGNSSAntStatus(gpsDetails)
+		if antCheck.Verify() == nil {
 			break
 		}
 
 		time.Sleep(time.Second)
 	}
 
-	utils.IfErrorExitOrPanic(err)
-
-	return []validations.Validation{
-		antCheck,
-		validations.NewGNSSNavStatus(gpsDetails),
+	if gpsDetails == nil {
+		log.Warnf("Skipping GNSS status validations: %v", lastErr)
+		return []validations.Validation{
+			validations.NewUnknownGNSSAntStatus(lastErr),
+			validations.NewUnknownGNSSNavStatus(lastErr),
+		}
 	}
+
+	navCheck = validations.NewGNSSNavStatus(gpsDetails)
+
+	return []validations.Validation{antCheck, navCheck}
 }
 
 func getValidations(interfaceName, ptpNodeName, kubeConfig, clockType string) []validations.Validation {

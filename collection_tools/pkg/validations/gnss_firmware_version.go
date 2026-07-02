@@ -27,5 +27,6 @@ func NewGNSS(gnss *devices.GPSVersions) *VersionCheck {
 		MinVersion:   MinGNSSVersion,
 		description:  gnssDescription,
 		order:        gnssVersionOrdering,
+		strict:       true,
 	}
 }

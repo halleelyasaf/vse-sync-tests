@@ -62,6 +62,28 @@ func sortAndDeduplicateInterfaces(interfaces []DetectedInterface) []DetectedInte
 	return deduplicated
 }
 
+// ensureAtLeastOnePrimary marks the first interface as primary when every port is a
+// BC slave (masterOnly/serverOnly), so env verify and the main collector have a target NIC.
+func ensureAtLeastOnePrimary(interfaces []DetectedInterface) []DetectedInterface {
+	if len(interfaces) == 0 {
+		return interfaces
+	}
+
+	for _, iface := range interfaces {
+		if iface.Primary {
+			return interfaces
+		}
+	}
+
+	interfaces[0].Primary = true
+	log.Infof(
+		"No primary PTP interface detected; using %s for environment checks and main collection",
+		interfaces[0].Name,
+	)
+
+	return interfaces
+}
+
 func Detect(kubeConfig, ptpNodeName string, outputAsJSON bool, clockType string) {
 	clientset, err := clients.GetClientset(kubeConfig)
 	utils.IfErrorExitOrPanic(err)
@@ -69,19 +91,23 @@ func Detect(kubeConfig, ptpNodeName string, outputAsJSON bool, clockType string)
 	utils.IfErrorExitOrPanic(err)
 	interfaces, err := checkPTPConfig(ctx, clockType)
 	utils.IfErrorExitOrPanic(err)
+	if len(interfaces) == 0 {
+		utils.IfErrorExitOrPanic(errors.New("no PTP interfaces detected from ptp4l or ts2phc configuration"))
+	}
+	interfaces = ensureAtLeastOnePrimary(interfaces)
 	output(os.Stdout, interfaces, outputAsJSON)
 }
 
-func output(outWriter io.Writer, interfaces []DetectedInterface, outputAsJSON bool) {
-	if outputAsJSON {
-		out, err := json.MarshalIndent(interfaces, "", "  ")
-		utils.IfErrorExitOrPanic(err)
-		_, err = outWriter.Write(out)
-		utils.IfErrorExitOrPanic(err)
-	} else {
-		_, err := fmt.Fprintf(outWriter, "%T(%v)", interfaces, interfaces)
-		utils.IfErrorExitOrPanic(err)
+func output(outWriter io.Writer, interfaces []DetectedInterface, indent bool) {
+	out, err := json.Marshal(interfaces)
+	if indent {
+		out, err = json.MarshalIndent(interfaces, "", "  ")
 	}
+	utils.IfErrorExitOrPanic(err)
+	_, err = outWriter.Write(out)
+	utils.IfErrorExitOrPanic(err)
+	_, err = outWriter.Write([]byte("\n"))
+	utils.IfErrorExitOrPanic(err)
 }
 
 func parseConfig(contents string) (map[string][]string, error) {
@@ -203,21 +229,39 @@ func checkPTPConfig(ctx clients.ExecContext, clockType string) ([]DetectedInterf
 		// For BC clocks, try ptp4l config first
 		interfaces, err := checkPtp4lConfig(ctx)
 		if err != nil {
+			if len(interfaces) > 0 {
+				log.Warnf("ptp4l config had errors but returned interfaces for BC clock: %v", err)
+				return interfaces, nil
+			}
 			log.Info("ptp4l config not found, falling back to ts2phc config for BC clock")
 			return checkTs2PhcConfig(ctx)
 		}
 
-		return interfaces, nil
-	} else {
-		// For GM clocks, try ts2phc config first
-		interfaces, err := checkTs2PhcConfig(ctx)
-		if err != nil {
-			log.Info("ts2phc config not found, falling back to ptp4l config for GM clock")
-			return checkPtp4lConfig(ctx)
+		if len(interfaces) == 0 {
+			log.Info("no interfaces in ptp4l config, falling back to ts2phc config for BC clock")
+			return checkTs2PhcConfig(ctx)
 		}
 
 		return interfaces, nil
 	}
+
+	// For GM clocks, try ts2phc config first
+	interfaces, err := checkTs2PhcConfig(ctx)
+	if err != nil {
+		if len(interfaces) > 0 {
+			log.Warnf("ts2phc config had errors but returned interfaces for GM clock: %v", err)
+			return interfaces, nil
+		}
+		log.Info("ts2phc config not found, falling back to ptp4l config for GM clock")
+		return checkPtp4lConfig(ctx)
+	}
+
+	if len(interfaces) == 0 {
+		log.Info("no interfaces in ts2phc config, falling back to ptp4l config for GM clock")
+		return checkPtp4lConfig(ctx)
+	}
+
+	return interfaces, nil
 }
 
 func checkPtp4lConfig(ctx clients.ExecContext) ([]DetectedInterface, error) {
@@ -259,7 +303,7 @@ func checkPtp4lConfig(ctx clients.ExecContext) ([]DetectedInterface, error) {
 		detected = append(detected, getDetectedInterfacesFromPtp4l(ctx, config)...)
 	}
 
-	return detected, utils.MakeCompositeError("", errs) //nolint:wrapcheck //this just combines errors.
+	return sortAndDeduplicateInterfaces(detected), utils.MakeCompositeError("", errs) //nolint:wrapcheck //this just combines errors.
 }
 
 func getDetectedInterfacesFromPtp4l(ctx clients.ExecContext, config map[string][]string) []DetectedInterface {
@@ -332,5 +376,5 @@ func checkTs2PhcConfig(ctx clients.ExecContext) ([]DetectedInterface, error) { /
 		detected = append(detected, getDetectedInterfaces(ctx, config)...)
 	}
 
-	return detected, utils.MakeCompositeError("", errs) //nolint:wrapcheck //this just combines errors.
+	return sortAndDeduplicateInterfaces(detected), utils.MakeCompositeError("", errs) //nolint:wrapcheck //this just combines errors.
 }

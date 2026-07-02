@@ -57,7 +57,6 @@ var _ = Describe("CmdGrp", func() {
 		It("should be added to GetCommand's output", func() {
 			cmd, err := clients.NewCmd("TestKey", "Hello This is a test")
 			Expect(err).ToNot(HaveOccurred())
-
 			cmdGrp := &clients.CmdGroup{}
 			cmdGrp.AddCommand(cmd)
 			cmdString := cmdGrp.GetCommand()
@@ -80,7 +79,6 @@ var _ = Describe("CmdGrp", func() {
 			Expect(err).ToNot(HaveOccurred())
 			cmd2, err := clients.NewCmd(key2, "This is another test goodbye.")
 			Expect(err).ToNot(HaveOccurred())
-
 			cmdGrp := &clients.CmdGroup{}
 			cmdGrp.AddCommand(cmd)
 			cmdGrp.AddCommand(cmd2)
