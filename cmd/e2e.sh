@@ -225,14 +225,15 @@ verify_env(){
         exit 1
     fi
     LOCAL_INTERFACE_NAME=$(jq -r '.[] | select(.primary == true).name' $DEVJSON)
-    go run main.go env verify --interface="$LOCAL_INTERFACE_NAME" --nodeName="$NODE_NAME" --kubeconfig="$LOCAL_KUBECONFIG" --use-analyser-format --clock-type="$TEST_MODE" > $ENVJSONRAW
+    go run main.go env verify --interface="$LOCAL_INTERFACE_NAME" --nodeName="$NODE_NAME" --kubeconfig="$LOCAL_KUBECONFIG" --use-analyser-format --clock-type="$TEST_MODE" > $ENVJSONRAW 2>&1
 
-    if [ $? -gt 0 ]
-    then
-        cat $ENVJSONRAW
-    else
-
-        cat $ENVJSONRAW | jq -s -c "$junit_template" > $ENVJSON
+    local verify_status=$?
+    if [ $verify_status -gt 0 ]; then
+        echo "WARNING: env verify failed (exit code $verify_status), continuing with data collection" >&2
+        cat $ENVJSONRAW >&2
+    elif ! jq -s -c "$junit_template" < $ENVJSONRAW > $ENVJSON 2>/dev/null; then
+        echo "WARNING: env verify produced invalid JSON, continuing with data collection" >&2
+        cat $ENVJSONRAW >&2
     fi
     set -e
     popd >/dev/null 2>&1

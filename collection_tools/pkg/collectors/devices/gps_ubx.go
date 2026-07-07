@@ -88,27 +88,28 @@ var (
 	ubxAntFullBlockRegex = regexp.MustCompile(
 		timeStampPattern +
 			`\nUBX-MON-RF:\n` +
-			`\s+version \d nBlocks (\d) reserved1 \d \d\n(?s:([^UBX]*))`,
+			`\s+version \d nBlocks (\d) reserved1 \w+(?:\s\w+)*\n(?s:([^UBX]*))`,
 		// 1686916187.0584
 		// UBX-MON-RF:
 		//  version 0 nBlocks 2 reserved1 0 0
+		//  version 0 nBlocks 2 reserved1 x0       (newer firmware)
 		//		blockId 0 flags x0 antStatus 2 antPower 1 postStatus 0 reserved2 0 0 0 0
 		//		noisePerMS 90 agcCnt 4914 jamInd 14 ofsI 15 magI 147 ofsQ 25 magQ 148
 		//		reserved3 0 0 0
-		//	   blockId 1 flags x0 antStatus 2 antPower 1 postStatus 0 reserved2 0 0 0 0
+		//	   0: blockId 0 flags x0 antStatus 2 antPower 1 postStatus 0 reserved2 x0
 		//		noisePerMS 47 agcCnt 6318 jamInd 6 ofsI 17 magI 151 ofsQ 3 magQ 149
 		//		reserved3 0 0 0
 	)
 	ubxAntInternalBlockRegex = regexp.MustCompile(
-		`\s+blockId (\d) flags \w+ antStatus (\d) antPower (\d+) postStatus \d reserved2 \d \d \d \d\n` +
+		`\s+(?:\d+:\s+)?blockId (\d) flags \w+ antStatus (\d) antPower (\d+) postStatus \d+ reserved2 \w+(?:\s\w+)*\n` +
 			`\s+noisePerMS \d+ agcCnt \d+ jamInd \d+ ofsI -?\d+ magI \d+ ofsQ -?\d+ magQ \d+\n` +
-			`\s+reserved3 \d \d \d\n?`,
+			`\s+reserved3 \d+ \d+ \d+\n?`,
 		// 	blockId 0 flags x0 antStatus 2 antPower 1 postStatus 0 reserved2 0 0 0 0
 		// 	noisePerMS 90 agcCnt 4914 jamInd 14 ofsI 15 magI 147 ofsQ 25 magQ 148
 		// 	reserved3 0 0 0
-		//    blockId 1 flags x0 antStatus 2 antPower 1 postStatus 0 reserved2 0 0 0 0
+		//    0: blockId 0 flags x0 antStatus 2 antPower 1 postStatus 0 reserved2 x0
 		// 	noisePerMS 47 agcCnt 6318 jamInd 6 ofsI 17 magI 151 ofsQ 3 magQ 149
-		// 	reserved3 0 0 0
+		// 	reserved3 10 0 0
 	)
 
 	gpsFetcher *fetcher.Fetcher

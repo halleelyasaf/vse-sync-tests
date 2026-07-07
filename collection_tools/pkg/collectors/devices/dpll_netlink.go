@@ -183,6 +183,66 @@ type NetlinkFrequencySupportedRange struct {
 // 	'type': 'gnss'
 // },
 
+// Wrapper structs for iproute2 dpll -j output which wraps arrays in
+// {"device": [...]} or {"pin": [...]}. We fall back to plain arrays
+// for backward compatibility with the old YNL cli.py format.
+type dpllDeviceResponse struct {
+	Device []NetlinkStateEntry `json:"device"`
+}
+
+type dpllPinListResponse struct {
+	Pin []*NetlinkPin `json:"pin"`
+}
+
+type dpllPinSingleResponse struct {
+	Pin []NetlinkPin `json:"pin"`
+}
+
+// parseDeviceJSON tries the wrapped {"device": [...]} format first,
+// then falls back to a plain [...] array.
+func parseDeviceJSON(raw []byte) ([]NetlinkStateEntry, error) {
+	var wrapped dpllDeviceResponse
+	if err := json.Unmarshal(raw, &wrapped); err == nil && len(wrapped.Device) > 0 {
+		return wrapped.Device, nil
+	}
+
+	var entries []NetlinkStateEntry
+	if err := json.Unmarshal(raw, &entries); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal device JSON: %w", err)
+	}
+	return entries, nil
+}
+
+// parsePinListJSON tries the wrapped {"pin": [...]} format first,
+// then falls back to a plain [...] array.
+func parsePinListJSON(raw []byte) ([]*NetlinkPin, error) {
+	var wrapped dpllPinListResponse
+	if err := json.Unmarshal(raw, &wrapped); err == nil && len(wrapped.Pin) > 0 {
+		return wrapped.Pin, nil
+	}
+
+	var entries []*NetlinkPin
+	if err := json.Unmarshal(raw, &entries); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal pin list JSON: %w", err)
+	}
+	return entries, nil
+}
+
+// parseSinglePinJSON tries the wrapped {"pin": [{...}]} format first,
+// then falls back to a plain {...} object.
+func parseSinglePinJSON(raw []byte) (NetlinkPin, error) {
+	var wrapped dpllPinSingleResponse
+	if err := json.Unmarshal(raw, &wrapped); err == nil && len(wrapped.Pin) > 0 {
+		return wrapped.Pin[0], nil
+	}
+
+	var pin NetlinkPin
+	if err := json.Unmarshal(raw, &pin); err != nil {
+		return pin, fmt.Errorf("failed to unmarshal single pin JSON: %w", err)
+	}
+	return pin, nil
+}
+
 var (
 	dpllNetlinkFetcher map[uint64]*fetcher.Fetcher
 	dpllClockIDFetcher map[string]*fetcher.Fetcher
@@ -206,9 +266,7 @@ func buildPostProcessDPLLNetlink(clockID uint64) fetcher.PostProcessFuncType {
 			)
 		}
 
-		entries := make([]NetlinkStateEntry, 0)
-
-		err := json.Unmarshal([]byte(deviceJSON), &entries)
+		entries, err := parseDeviceJSON([]byte(deviceJSON))
 		if err != nil {
 			log.Errorf("Failed to unmarshal netlink device output: %s", err.Error())
 		}
@@ -227,9 +285,7 @@ func buildPostProcessDPLLNetlink(clockID uint64) fetcher.PostProcessFuncType {
 			}
 		}
 
-		pin := NetlinkPin{}
-
-		err = json.Unmarshal([]byte(result["dpll-netlink-offset"]), &pin)
+		pin, err := parseSinglePinJSON([]byte(result["dpll-netlink-offset"]))
 		if err != nil {
 			log.Errorf("Failed to unmarshal netlink pin output: %s", err.Error())
 		}
@@ -338,11 +394,9 @@ func BuildNetlinkInfoFetcher(interfaceName string) error {
 }
 
 func selectPin(pinsJSON []byte, clockID uint64) (int32, string, error) { //nolint:funlen,gocritic,cyclop // allow slightly longer function for sake of readability
-	entries := make([]*NetlinkPin, 0)
-
-	err := json.Unmarshal(pinsJSON, &entries)
+	entries, err := parsePinListJSON(pinsJSON)
 	if err != nil {
-		return 0, "", fmt.Errorf("failed to unmarshal netlink output: %s", err.Error())
+		return 0, "", fmt.Errorf("failed to unmarshal netlink output: %w", err)
 	}
 
 	if len(entries) == 0 {
@@ -473,8 +527,8 @@ func postProcessDPLLNetlinkClockID(result map[string]string) (map[string]any, er
 		if errors.As(err, &reqNotMet) {
 			log.Debugf("No pins found for NIC clockID %d, trying DPLL device clock IDs", clockID)
 
-			devices := make([]NetlinkStateEntry, 0)
-			if devErr := json.Unmarshal([]byte(result["dpll-netlink-devices"]), &devices); devErr == nil && len(devices) > 0 {
+			devices, devErr := parseDeviceJSON([]byte(result["dpll-netlink-devices"]))
+			if devErr == nil && len(devices) > 0 {
 				fallbackClockID := devices[0].ClockID
 				log.Infof("Using DPLL device clock ID %d (module: %s) instead of NIC clock ID %d",
 					fallbackClockID, devices[0].Driver, clockID)
