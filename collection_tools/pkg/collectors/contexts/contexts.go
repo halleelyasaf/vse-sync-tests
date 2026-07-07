@@ -21,13 +21,17 @@ const (
 )
 
 // GetNetlinkDebugContainerImage returns the container image for netlink debug pod,
-// configurable via NETLINK_DEBUG_CONTAINER_IMAGE environment variable
+// configurable via NETLINK_DEBUG_CONTAINER_IMAGE environment variable.
+//
+// The default image uses iproute2's dpll binary which handles all netlink
+// attributes natively, avoiding schema mismatches when firmware exposes
+// new attributes (e.g. attribute 28 in NVM 4.91+).
 func GetNetlinkDebugContainerImage() string {
 	if image := os.Getenv("NETLINK_DEBUG_CONTAINER_IMAGE"); image != "" {
 		return image
 	}
 
-	return "quay.io/redhat-partner-solutions/dpll-debug:0.5"
+	return "quay.io/vgrinber/tools:dpll"
 }
 
 func GetPTPDaemonContext(clientset *clients.Clientset, ptpNodeName string) (clients.ExecContext, error) {

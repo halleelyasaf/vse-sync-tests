@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"strings"
 
 	log "github.com/sirupsen/logrus"
 
@@ -196,9 +197,18 @@ func buildPostProcessDPLLNetlink(clockID uint64) fetcher.PostProcessFuncType {
 	return func(result map[string]string) (map[string]any, error) {
 		processedResult := make(map[string]any)
 
+		deviceJSON := result["dpll-netlink-device"]
+		if strings.Contains(deviceJSON, "has no attribute with value") {
+			return processedResult, fmt.Errorf(
+				"dpll tool does not recognise a netlink attribute — "+
+					"update the container image (NETLINK_DEBUG_CONTAINER_IMAGE env var): %s",
+				deviceJSON,
+			)
+		}
+
 		entries := make([]NetlinkStateEntry, 0)
 
-		err := json.Unmarshal([]byte(result["dpll-netlink-device"]), &entries)
+		err := json.Unmarshal([]byte(deviceJSON), &entries)
 		if err != nil {
 			log.Errorf("Failed to unmarshal netlink device output: %s", err.Error())
 		}
@@ -244,19 +254,14 @@ func BuildDPLLNetlinkDeviceFetcher(params NetlinkParameters) error { //nolint:du
 		[]*clients.Cmd{dateCmd},
 		[]fetcher.AddCommandArgs{
 			{
-				Key: "dpll-netlink-device",
-				Command: "/linux/tools/net/ynl/cli.py --spec /linux/Documentation/netlink/specs/dpll.yaml --dump device-get | " +
-					"python3 /root/custom_scripts/json_encoder.py",
-				Trim: true,
+				Key:     "dpll-netlink-device",
+				Command: "dpll -j device show",
+				Trim:    true,
 			},
 			{
-				Key: "dpll-netlink-offset",
-				Command: fmt.Sprintf(
-					"/linux/tools/net/ynl/cli.py --spec /linux/Documentation/netlink/specs/dpll.yaml --do pin-get --json %s | "+
-						"python3 /root/custom_scripts/json_encoder.py",
-					fmt.Sprintf("'{\"id\": %d}'", params.OffsetPin),
-				),
-				Trim: true,
+				Key:     "dpll-netlink-offset",
+				Command: fmt.Sprintf("dpll -j pin show id %d", params.OffsetPin),
+				Trim:    true,
 			},
 		},
 	)
@@ -310,16 +315,14 @@ func BuildNetlinkInfoFetcher(interfaceName string) error {
 				Trim: true,
 			},
 			{
-				Key: "dpll-netlink-pins",
-				Command: "/linux/tools/net/ynl/cli.py --spec /linux/Documentation/netlink/specs/dpll.yaml --dump pin-get | " +
-					"python3 /root/custom_scripts/json_encoder.py",
-				Trim: true,
+				Key:     "dpll-netlink-pins",
+				Command: "dpll -j pin show",
+				Trim:    true,
 			},
 			{
-				Key: "dpll-netlink-devices",
-				Command: "/linux/tools/net/ynl/cli.py --spec /linux/Documentation/netlink/specs/dpll.yaml --dump device-get | " +
-					"python3 /root/custom_scripts/json_encoder.py",
-				Trim: true,
+				Key:     "dpll-netlink-devices",
+				Command: "dpll -j device show",
+				Trim:    true,
 			},
 		},
 	)
@@ -450,8 +453,18 @@ func postProcessDPLLNetlinkClockID(result map[string]string) (map[string]any, er
 
 	processedResult["clockID"] = clockID
 
+	pinsJSON := result["dpll-netlink-pins"]
+	if strings.Contains(pinsJSON, "has no attribute with value") {
+		return processedResult, fmt.Errorf(
+			"dpll tool does not support a netlink attribute reported by the firmware — "+
+				"update the container image (set NETLINK_DEBUG_CONTAINER_IMAGE env var "+
+				"to a newer version): %s",
+			pinsJSON,
+		)
+	}
+
 	// Try to select a pin using the NIC's clock ID first
-	offsetPintID, pinType, err := selectPin([]byte(result["dpll-netlink-pins"]), clockID)
+	offsetPintID, pinType, err := selectPin([]byte(pinsJSON), clockID)
 
 	// If no pins match the NIC's clock ID, try using the clock ID from DPLL devices
 	// This handles cases where DPLL is on a separate timing card (e.g., zl3073x)
@@ -462,12 +475,11 @@ func postProcessDPLLNetlinkClockID(result map[string]string) (map[string]any, er
 
 			devices := make([]NetlinkStateEntry, 0)
 			if devErr := json.Unmarshal([]byte(result["dpll-netlink-devices"]), &devices); devErr == nil && len(devices) > 0 {
-				// Use the first DPLL device's clock ID as fallback
 				fallbackClockID := devices[0].ClockID
 				log.Infof("Using DPLL device clock ID %d (module: %s) instead of NIC clock ID %d",
 					fallbackClockID, devices[0].Driver, clockID)
 
-				offsetPintID, pinType, err = selectPin([]byte(result["dpll-netlink-pins"]), fallbackClockID)
+				offsetPintID, pinType, err = selectPin([]byte(pinsJSON), fallbackClockID)
 				if err == nil {
 					processedResult["clockID"] = fallbackClockID
 				}

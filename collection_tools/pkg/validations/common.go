@@ -5,6 +5,7 @@ package validations
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"golang.org/x/mod/semver"
@@ -44,13 +45,27 @@ type VersionCheck struct {
 	order        int    `json:"-"`
 }
 
+// normalizeVersion strips leading zeros from each dot-separated component
+// so that firmware versions like "5.00" become "5.0" (valid semver).
+func normalizeVersion(v string) string {
+	parts := strings.Split(v, ".")
+	for i, p := range parts {
+		if n, err := strconv.Atoi(p); err == nil {
+			parts[i] = strconv.Itoa(n)
+		}
+	}
+	return strings.Join(parts, ".")
+}
+
 func (verCheck *VersionCheck) Verify() error {
-	ver := "v" + strings.ReplaceAll(verCheck.checkVersion, "_", "-")
+	normalized := normalizeVersion(strings.ReplaceAll(verCheck.checkVersion, "_", "-"))
+	ver := "v" + normalized
 	if !semver.IsValid(ver) {
 		return fmt.Errorf("could not parse version %s", ver)
 	}
 
-	if semver.Compare(ver, "v"+verCheck.MinVersion) < 0 {
+	minNormalized := normalizeVersion(verCheck.MinVersion)
+	if semver.Compare(ver, "v"+minNormalized) < 0 {
 		return utils.NewInvalidEnvError(
 			fmt.Errorf("unexpected version: %s < %s", verCheck.checkVersion, verCheck.MinVersion),
 		)

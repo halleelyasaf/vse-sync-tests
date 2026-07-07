@@ -42,7 +42,12 @@ func (dpll *DPLLNetlinkCollector) Start() error {
 
 	netlinkParams, err := devices.GetNetlinkParameters(dpll.ctx, dpll.interfaceName)
 	if err != nil {
-		return fmt.Errorf("dpll netlink collector failed to find clock id: %w", err)
+		return fmt.Errorf(
+			"dpll netlink collector failed to find clock id for interface %s "+
+				"(this may indicate the container image does not support the firmware's "+
+				"netlink schema — check NETLINK_DEBUG_CONTAINER_IMAGE env var): %w",
+			dpll.interfaceName, err,
+		)
 	}
 
 	log.Debug("clockIDStuct.ClockID: ", netlinkParams.ClockID)
