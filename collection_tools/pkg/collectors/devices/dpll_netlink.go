@@ -198,11 +198,37 @@ type dpllPinSingleResponse struct {
 	Pin []NetlinkPin `json:"pin"`
 }
 
+// isWrappedWithKey reports whether raw is a JSON object that contains key.
+// Used to distinguish iproute2 wrapped responses ({"device":[]} / {"pin":[]})
+// from legacy plain arrays/objects without misclassifying empty wrappers.
+func isWrappedWithKey(raw []byte, key string) bool {
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return false
+	}
+	_, ok := obj[key]
+	return ok
+}
+
+func unsupportedAttributeError(raw string) error {
+	if strings.Contains(raw, "has no attribute with value") {
+		return fmt.Errorf(
+			"dpll tool does not recognise a netlink attribute — "+
+				"update the container image (NETLINK_DEBUG_CONTAINER_IMAGE env var): %s",
+			raw,
+		)
+	}
+	return nil
+}
+
 // parseDeviceJSON tries the wrapped {"device": [...]} format first,
 // then falls back to a plain [...] array.
 func parseDeviceJSON(raw []byte) ([]NetlinkStateEntry, error) {
-	var wrapped dpllDeviceResponse
-	if err := json.Unmarshal(raw, &wrapped); err == nil && len(wrapped.Device) > 0 {
+	if isWrappedWithKey(raw, "device") {
+		var wrapped dpllDeviceResponse
+		if err := json.Unmarshal(raw, &wrapped); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal wrapped device JSON: %w", err)
+		}
 		return wrapped.Device, nil
 	}
 
@@ -216,8 +242,11 @@ func parseDeviceJSON(raw []byte) ([]NetlinkStateEntry, error) {
 // parsePinListJSON tries the wrapped {"pin": [...]} format first,
 // then falls back to a plain [...] array.
 func parsePinListJSON(raw []byte) ([]*NetlinkPin, error) {
-	var wrapped dpllPinListResponse
-	if err := json.Unmarshal(raw, &wrapped); err == nil && len(wrapped.Pin) > 0 {
+	if isWrappedWithKey(raw, "pin") {
+		var wrapped dpllPinListResponse
+		if err := json.Unmarshal(raw, &wrapped); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal wrapped pin list JSON: %w", err)
+		}
 		return wrapped.Pin, nil
 	}
 
@@ -231,12 +260,18 @@ func parsePinListJSON(raw []byte) ([]*NetlinkPin, error) {
 // parseSinglePinJSON tries the wrapped {"pin": [{...}]} format first,
 // then falls back to a plain {...} object.
 func parseSinglePinJSON(raw []byte) (NetlinkPin, error) {
-	var wrapped dpllPinSingleResponse
-	if err := json.Unmarshal(raw, &wrapped); err == nil && len(wrapped.Pin) > 0 {
+	var pin NetlinkPin
+	if isWrappedWithKey(raw, "pin") {
+		var wrapped dpllPinSingleResponse
+		if err := json.Unmarshal(raw, &wrapped); err != nil {
+			return pin, fmt.Errorf("failed to unmarshal wrapped single pin JSON: %w", err)
+		}
+		if len(wrapped.Pin) == 0 {
+			return pin, fmt.Errorf("failed to unmarshal single pin JSON: empty pin array")
+		}
 		return wrapped.Pin[0], nil
 	}
 
-	var pin NetlinkPin
 	if err := json.Unmarshal(raw, &pin); err != nil {
 		return pin, fmt.Errorf("failed to unmarshal single pin JSON: %w", err)
 	}
@@ -258,12 +293,8 @@ func buildPostProcessDPLLNetlink(clockID uint64) fetcher.PostProcessFuncType {
 		processedResult := make(map[string]any)
 
 		deviceJSON := result["dpll-netlink-device"]
-		if strings.Contains(deviceJSON, "has no attribute with value") {
-			return processedResult, fmt.Errorf(
-				"dpll tool does not recognise a netlink attribute — "+
-					"update the container image (NETLINK_DEBUG_CONTAINER_IMAGE env var): %s",
-				deviceJSON,
-			)
+		if err := unsupportedAttributeError(deviceJSON); err != nil {
+			return processedResult, err
 		}
 
 		entries, err := parseDeviceJSON([]byte(deviceJSON))
@@ -285,7 +316,12 @@ func buildPostProcessDPLLNetlink(clockID uint64) fetcher.PostProcessFuncType {
 			}
 		}
 
-		pin, err := parseSinglePinJSON([]byte(result["dpll-netlink-offset"]))
+		offsetJSON := result["dpll-netlink-offset"]
+		if err := unsupportedAttributeError(offsetJSON); err != nil {
+			return processedResult, err
+		}
+
+		pin, err := parseSinglePinJSON([]byte(offsetJSON))
 		if err != nil {
 			log.Errorf("Failed to unmarshal netlink pin output: %s", err.Error())
 		}
@@ -508,13 +544,8 @@ func postProcessDPLLNetlinkClockID(result map[string]string) (map[string]any, er
 	processedResult["clockID"] = clockID
 
 	pinsJSON := result["dpll-netlink-pins"]
-	if strings.Contains(pinsJSON, "has no attribute with value") {
-		return processedResult, fmt.Errorf(
-			"dpll tool does not support a netlink attribute reported by the firmware — "+
-				"update the container image (set NETLINK_DEBUG_CONTAINER_IMAGE env var "+
-				"to a newer version): %s",
-			pinsJSON,
-		)
+	if err := unsupportedAttributeError(pinsJSON); err != nil {
+		return processedResult, err
 	}
 
 	// Try to select a pin using the NIC's clock ID first
@@ -527,7 +558,12 @@ func postProcessDPLLNetlinkClockID(result map[string]string) (map[string]any, er
 		if errors.As(err, &reqNotMet) {
 			log.Debugf("No pins found for NIC clockID %d, trying DPLL device clock IDs", clockID)
 
-			devices, devErr := parseDeviceJSON([]byte(result["dpll-netlink-devices"]))
+			devicesJSON := result["dpll-netlink-devices"]
+			if attrErr := unsupportedAttributeError(devicesJSON); attrErr != nil {
+				return processedResult, attrErr
+			}
+
+			devices, devErr := parseDeviceJSON([]byte(devicesJSON))
 			if devErr == nil && len(devices) > 0 {
 				fallbackClockID := devices[0].ClockID
 				log.Infof("Using DPLL device clock ID %d (module: %s) instead of NIC clock ID %d",

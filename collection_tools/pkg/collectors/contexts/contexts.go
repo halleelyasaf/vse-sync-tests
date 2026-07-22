@@ -31,7 +31,9 @@ func GetNetlinkDebugContainerImage() string {
 		return image
 	}
 
-	return "quay.io/vgrinber/tools:dpll"
+	// Pin by digest: the :dpll tag is mutable and lives in a personal namespace.
+	// Prefer NETLINK_DEBUG_CONTAINER_IMAGE (or a future org-owned mirror) in CI.
+	return "quay.io/vgrinber/tools:dpll@sha256:b305f7b066a13a9c4bd402175cc835eef4ef9df212ae3b944f8ce01aebf87c49"
 }
 
 func GetPTPDaemonContext(clientset *clients.Clientset, ptpNodeName string) (clients.ExecContext, error) {
